@@ -1,0 +1,27 @@
+{
+  "name": "proximate",
+  "version": "0.1.0",
+  "description": "Proxy-based RPC over MessageChannel",
+  "main": "dist/umd/proximate.js",
+  "module": "dist/esm/proximate.js",
+  "types": "dist/proximate.d.ts",
+  "scripts": {
+    "build": "rollup -c",
+    "build:declaration": "tsc --declaration --emitDeclarationOnly --outDir dist/",
+    "build:watch": "rollup -c --watch",
+    "test": "karma start"
+  },
+  "keywords": [],
+  "author": "Roy Hashimoto",
+  "license": "ISC",
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^4.1.1",
+    "jasmine": "^3.5.0",
+    "karma": "^5.0.5",
+    "karma-chrome-launcher": "^3.1.0",
+    "karma-jasmine": "^3.1.1",
+    "rollup": "^2.9.0",
+    "tslib": "^1.11.2",
+    "typescript": "^3.8.3"
+  }
+}
