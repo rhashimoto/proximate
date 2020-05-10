@@ -6,7 +6,7 @@
   "module": "dist/esm/proximate.js",
   "types": "dist/proximate.d.ts",
   "scripts": {
-    "build": "rollup -c",
+    "build": "rollup -c && npm run build:declaration",
     "build:declaration": "tsc --declaration --emitDeclarationOnly --outDir dist/",
     "build:watch": "rollup -c --watch",
     "test": "karma start"
