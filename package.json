@@ -9,6 +9,7 @@
     "build": "rollup -c && npm run build:declaration",
     "build:declaration": "tsc --declaration --emitDeclarationOnly --outDir dist/",
     "build:watch": "rollup -c --watch",
+    "prepare": "npm run build",
     "test": "karma start"
   },
   "keywords": [],
