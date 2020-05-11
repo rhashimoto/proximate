@@ -5,14 +5,12 @@ const DEBUG_METHOD = Symbol('debug');
 
 // Message object keys. We make the keys as short as possible to
 // minimize message size.
-enum MessageKey {
-  NONCE = 'n', // Unique identifier to match requests and responses.
-  ARGS = 'a',  // Array of serialized function arguments.
-  RESULT = 'r',// Serialized result.
-  ERROR = 'e', // Serialized Error instance.
-  PROXY = 'p', // Array of strings at top level. Also used for serialization.
-  DATA = 'd'   // Not a top-level key, only used for serialization.
-};
+const NONCE = 'n'; // Unique identifier to match requests and responses.
+const ARGS = 'a';  // Array of serialized function arguments.
+const RESULT = 'r';// Serialized result.
+const ERROR = 'e'; // Serialized Error instance.
+const PROXY = 'p'; // Array of strings at top level. Also used for serialization.
+const DATA = 'd';  // Not a top-level key, only used for serialization.
 
 // Global mapping of proxy id to local object. When a proxy for an
 // object is sent to another endpoint, we give it an id (a nonce) and
@@ -72,19 +70,19 @@ export default class Proximate {
   }
 
   private isRequest(message: object) {
-    return message.hasOwnProperty(MessageKey.NONCE) && message.hasOwnProperty(MessageKey.PROXY);
+    return message.hasOwnProperty(NONCE) && message.hasOwnProperty(PROXY);
   }
 
   private async handleRequest(message: object): Promise<void> {
-    const response = { [MessageKey.NONCE]: message[MessageKey.NONCE] };
+    const response = { [NONCE]: message[NONCE] };
     let transferList = [];
     try {
       // The target is an array of strings where the first element is
       // the proxy id and the last element (if any) is the method
       // name. An empty string proxy id maps to the default proxy.
-      const path = message[MessageKey.PROXY].slice();
+      const path = message[PROXY].slice();
       let receiver = proxies.get(path.shift() || this.defaultProxyId);
-      if (!receiver) throw new Error(`no proxy '${message[MessageKey.PROXY][0]}' (revoked?)`);
+      if (!receiver) throw new Error(`no proxy '${message[PROXY][0]}' (revoked?)`);
       const member = path.pop();
 
       // Dereference any remaining elements of the path to get the
@@ -92,14 +90,14 @@ export default class Proximate {
       receiver = path.reduce((obj, property) => obj[property], receiver);
 
       let result: any;
-      if (message.hasOwnProperty(MessageKey.ARGS)) {
+      if (message.hasOwnProperty(ARGS)) {
         // Function call.
         const f = member ? receiver[member] : receiver;
-        const args = message[MessageKey.ARGS].map(arg => this.deserialize(arg));
+        const args = message[ARGS].map(arg => this.deserialize(arg));
         result = await f.apply(receiver, args);
       } else {
         // Member access.
-        if (message.hasOwnProperty(MessageKey.DATA)) {
+        if (message.hasOwnProperty(DATA)) {
           // Setter disabled for security reasons. Setters can
           // be dangerous when communicating with untrusted code.
           throw new Error('Proximate setter intentionally unsupported');
@@ -113,37 +111,37 @@ export default class Proximate {
       // Collect any associated Transferable objects.
       transferList = transfers.get(result) || [];
       transfers.delete(result);
-      response[MessageKey.RESULT] = this.serialize(result);
+      response[RESULT] = this.serialize(result);
     } catch (e) {
       transferList = transfers.get(e) || [];
       transfers.delete(e);
-      response[MessageKey.ERROR] = this.serialize(e);
+      response[ERROR] = this.serialize(e);
     }
 
     this.messagePort.postMessage(response, transferList);
   }
   
   private isResponse(message: object) {
-    return message.hasOwnProperty(MessageKey.NONCE) &&
-      (message.hasOwnProperty(MessageKey.RESULT) || message.hasOwnProperty(MessageKey.ERROR));
+    return message.hasOwnProperty(NONCE) &&
+      (message.hasOwnProperty(RESULT) || message.hasOwnProperty(ERROR));
   }
 
   private handleResponse(message: object): void {
     // Use the nonce to look up the request Promise functions (the
     // response nonce is the same as the request nonce).
-    const request = requests.get(message[MessageKey.NONCE]);
+    const request = requests.get(message[NONCE]);
     if (request) {
       // Fulfil the request Promise.
-      requests.delete(message[MessageKey.NONCE]);
-      if (message.hasOwnProperty(MessageKey.RESULT)) {
-        const result = this.deserialize(message[MessageKey.RESULT]);
+      requests.delete(message[NONCE]);
+      if (message.hasOwnProperty(RESULT)) {
+        const result = this.deserialize(message[RESULT]);
         request.resolve(result);
       } else {
-        const error = this.deserialize(message[MessageKey.ERROR]);
+        const error = this.deserialize(message[ERROR]);
         request.reject(error);
       }
     } else {
-      console.warn(`unmatched response '${message[MessageKey.NONCE]}'`);
+      console.warn(`unmatched response '${message[NONCE]}'`);
     }
   }
   
@@ -154,16 +152,16 @@ export default class Proximate {
       const proxyId = data[PROXY_MARKER];
       if (proxyId) {
         proxies.set(proxyId, data);
-        return { [MessageKey.PROXY]: proxyId };
+        return { [PROXY]: proxyId };
       } else if (data instanceof Error) {
         return {
-          [MessageKey.ERROR]: {
+          [ERROR]: {
             message: data.message,
             stack: data.stack
           }
         };
       }
-      return { [MessageKey.DATA]: data };
+      return { [DATA]: data };
     }
     return data;
   }
@@ -171,12 +169,12 @@ export default class Proximate {
   // Deserialize a single argument or a return value.
   private deserialize(data: any) {
     if (data === Object(data)) {
-      if (data[MessageKey.PROXY]) {
-        return this.createProxy([data[MessageKey.PROXY]]);
-      } else if (data[MessageKey.ERROR]) {
-        return Object.assign(new Error(), data[MessageKey.ERROR]);
+      if (data[PROXY]) {
+        return this.createProxy([data[PROXY]]);
+      } else if (data[ERROR]) {
+        return Object.assign(new Error(), data[ERROR]);
       }
-      return data[MessageKey.DATA];
+      return data[DATA];
     }
     return data;
   }
@@ -197,8 +195,8 @@ export default class Proximate {
           return result;
         });
         const request = {
-          [MessageKey.PROXY]: path,
-          [MessageKey.ARGS]: args.map(arg => this.serialize(arg))
+          [PROXY]: path,
+          [ARGS]: args.map(arg => this.serialize(arg))
         };
         return this.sendRequest(request, transferables);
       },
@@ -208,7 +206,7 @@ export default class Proximate {
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
           const request = {
-            [MessageKey.PROXY]: path
+            [PROXY]: path
           };
           const p = this.sendRequest(request);
           return p.then.bind(p);
@@ -235,8 +233,8 @@ export default class Proximate {
     // Make the function/method call request. The Promise will be
     // settled when the response message arrives.
     return new Promise((resolve, reject) => {
-      request[MessageKey.NONCE] = nonce();
-      requests.set(request[MessageKey.NONCE], { resolve, reject });
+      request[NONCE] = nonce();
+      requests.set(request[NONCE], { resolve, reject });
       this.messagePort.postMessage(request, transferables);
     });
   };

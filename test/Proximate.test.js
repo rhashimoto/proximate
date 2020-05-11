@@ -1,4 +1,4 @@
-import Proximate from '../dist/es/Proximate.js';
+import Proximate from '../dist/es/Proximate.min.js';
 
 describe('Proximate.create()', function() {
   let port1, port2;
