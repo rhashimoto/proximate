@@ -16,6 +16,11 @@ module.exports = function(config) {
     // list of files / patterns to load in the browser
     files: [
       {
+        pattern: 'src/**/*',
+        included: false,
+        watched: false
+      },
+      {
         pattern: 'dist/**/*',
         included: false,
         watched: true
@@ -32,6 +37,7 @@ module.exports = function(config) {
     ],
 
     proxies: {
+      '/src/': '/base/src/',
       '/test/': '/base/test/',
       '/dist/': '/base/dist/'
     },
