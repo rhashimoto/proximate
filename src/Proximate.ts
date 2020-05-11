@@ -1,5 +1,6 @@
 const RELAY_MARKER = Symbol('relay');
 const PROXY_MARKER = Symbol('proxy');
+const SETTABLE_MARKER = Symbol('settable');
 const CLOSE_METHOD = Symbol('close');
 const DEBUG_METHOD = Symbol('debug');
 
@@ -8,7 +9,7 @@ const DEBUG_METHOD = Symbol('debug');
 const NONCE = 'n'; // Unique identifier to match requests and responses.
 const ARGS = 'a';  // Array of serialized function arguments.
 const RESULT = 'r';// Serialized result.
-const ERROR = 'e'; // Serialized Error instance.
+const ERROR = 'e'; // Serialized exception. Also used for serialization.
 const PROXY = 'p'; // Array of strings at top level. Also used for serialization.
 const DATA = 'd';  // Not a top-level key, only used for serialization.
 
@@ -83,6 +84,7 @@ export default class Proximate {
       const path = message[PROXY].slice();
       let receiver = proxies.get(path.shift() || this.defaultProxyId);
       if (!receiver) throw new Error(`no proxy '${message[PROXY][0]}' (revoked?)`);
+      const settable = receiver.hasOwnProperty(SETTABLE_MARKER);
       const member = path.pop();
 
       // Dereference any remaining elements of the path to get the
@@ -98,11 +100,11 @@ export default class Proximate {
       } else {
         // Member access.
         if (message.hasOwnProperty(DATA)) {
-          // Setter disabled for security reasons. Setters can
-          // be dangerous when communicating with untrusted code.
-          throw new Error('Proximate setter intentionally unsupported');
-          
-          // receiver[member] = this._deserialize(message[DATA]);
+            if (!settable) {
+              console.warn('proxied object not settable');
+              throw new Error('proxied object not settable');
+            }
+            receiver[member] = this.deserialize(message[DATA]);
         } else {
           result = await receiver[member];
         }
@@ -205,25 +207,21 @@ export default class Proximate {
         if (property in target) return target[property];
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
-          const request = {
-            [PROXY]: path
-          };
-          const p = this.sendRequest(request);
+          const p = this.sendRequest({ [PROXY]: path });
           return p.then.bind(p);
         }
         return this.createProxy([...path, property], target);
       },
 
       set: (target, prop, value) => {
-        throw new Error('setters are intentionally disabled');
-      //   const transferList = transfers.get(value) || [];
-      //   transfers.delete(value);
-      //   const request = {
-      //     [PROXY]: [...path, prop],
-      //     [DATA]: this._serialize(value)
-      //   };
-      //   this._sendRequest(request);
-      //   return true;
+        const transferables = transfers.get(value) || [];
+        transfers.delete(value);
+        const request = {
+          [PROXY]: [...path, prop],
+          [DATA]: this.serialize(value)
+        };
+        this.sendRequest(request, transferables);
+        return true;
       }
     });
     return proxy;
@@ -263,9 +261,7 @@ export default class Proximate {
   // Mark an object to be passed by proxy when sent as an argument or
   // return value.
   public static enableProxy(obj: any) {
-    if (!obj[PROXY_MARKER]) {
-      obj[PROXY_MARKER] = nonce();
-    }
+    obj[PROXY_MARKER] = obj[PROXY_MARKER] || nonce();
     return obj;
   }
 
@@ -277,6 +273,13 @@ export default class Proximate {
     // If the object is sent by proxy in the future, don't allow
     // old proxies to work again.
     obj[PROXY_MARKER] = nonce();
+    return obj;
+  }
+
+  // Explicitly allow setting properties on an object via proxy. By
+  // default proxies are not settable.
+  public static settable(obj: any) {
+    obj[SETTABLE_MARKER] = true;
     return obj;
   }
 

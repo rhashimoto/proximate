@@ -149,36 +149,44 @@ describe('Proximate member access', function() {
     expect(await objectProxy.value).toBe(o.value);
   });
 
-  // it('should set', async () => {
-  //   const objectUnderTest = Proximate.create(port1, value => value);
-    
-  //   const proxy = Proximate.create(port2);
-    
-  //   const o = {
-  //     value: 10,
-  //   };
-  //   const objectProxy = await proxy(Proximate.enableProxy(o));
-  //   objectProxy.value = 11;
-  //   expect(await objectProxy.value).toBe(11);
-  //   expect(o.value).toBe(11);
-  // });
+  it('should not set by default', async () => {
+    const o = {
+      value: 1
+    };
+    const objectUnderTest = Proximate.create(port1, o);
+    const proxy = Proximate.create(port2);
 
-  // it('should support multi-level', async() => {
-  //   const objectUnderTest = Proximate.create(port1, value => value);
-    
-  //   const proxy = Proximate.create(port2);
-    
-  //   const o = {
-  //   };
-  //   const objectProxy = await proxy(Proximate.enableProxy(o));
-  //   objectProxy.sub = { a: 42 };
-  //   expect(await objectProxy.sub.a).toBe(42);
-  //   expect(o.sub.a).toBe(42);
+    proxy.value = 4321;
+    expect(await proxy.value).toBe(1);
+    expect(o.value).toBe(1);
+  });
 
-  //   objectProxy.sub.b = 54;
-  //   expect(await objectProxy.sub.b).toBe(54);
-  //   expect(o.sub.b).toBe(54);
-  // });
+  it('should set with settable', async () => {
+    const o = Proximate.settable({
+      value: 1
+    });
+    const objectUnderTest = Proximate.create(port1, o);
+    const proxy = Proximate.create(port2);
+
+    proxy.value = 4321;
+    expect(await proxy.value).toBe(4321);
+    expect(o.value).toBe(4321);
+  });
+
+  it('should support multi-level', async() => {
+    const o = Proximate.settable({
+    });
+    const objectUnderTest = Proximate.create(port1, o);
+    const proxy = Proximate.create(port2);
+    
+    proxy.sub = { a: 42 };
+    expect(await proxy.sub.a).toBe(42);
+    expect(o.sub.a).toBe(42);
+
+    proxy.sub.b = 54;
+    expect(await proxy.sub.b).toBe(54);
+    expect(o.sub.b).toBe(54);
+  });
 });
 
 describe('Proximate.revokeProxies()', function() {
