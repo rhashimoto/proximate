@@ -2,7 +2,6 @@ const RELAY_MARKER = Symbol('relay');
 const PROXY_MARKER = Symbol('proxy');
 const SETTABLE_MARKER = Symbol('settable');
 const CLOSE_METHOD = Symbol('close');
-const DEBUG_METHOD = Symbol('debug');
 
 // Message object keys. We make the keys as short as possible to
 // minimize message size.
@@ -12,14 +11,13 @@ const RESULT = 'r';// Serialized result.
 const ERROR = 'e'; // Serialized exception. Also used for serialization.
 const PROXY = 'p'; // Array of strings at top level. Also used for serialization.
 const DATA = 'd';  // Not a top-level key, only used for serialization.
-const CLOSE = 'c';
-
-type ProxyEntry = { target: any, count: number };
+const CLOSE = 'c'; // Dereference request marker.
 
 // Global mapping of proxy id to local object. When a proxy for an
 // object is sent to another endpoint, we give it an id (a nonce) and
 // send that over the wire. When the other endpoint uses the proxy, it
 // sends the id back and we use this map to retrieve the object.
+type ProxyEntry = { target: any, count: number };
 const proxies = new Map<string, ProxyEntry>();
 
 // Object to transferables mapping from Proximate.transfer().
@@ -41,8 +39,10 @@ function nonce(length = 24): string {
   return value.substring(0, length);
 }
 
+// Creation options.
+// passByProxy is a predicate function or array of predicate functions that
+// provide an automatic way to indicate whether to pass an object by proxy.
 type PassByProxy = (any) => boolean;
-
 interface Options {
   target?: any,
   passByProxy?: PassByProxy | PassByProxy[],
@@ -54,7 +54,6 @@ interface Options {
 // used internally.
 export default class Proximate {
   static close = CLOSE_METHOD;
-  static debug = DEBUG_METHOD;
 
   private passByProxy: PassByProxy[];
   private defaultProxyId: string = nonce();
@@ -168,9 +167,11 @@ export default class Proximate {
   // because some will be sent by proxy.
   private serialize(data: any) {
     if (data === Object(data)) {
+      // Automatically pass designated objects by proxy.
       if (this.passByProxy.some(predicate => predicate(data))) {
         Proximate.enableProxy(data);
       }
+
       const proxyId = data[PROXY_MARKER];
       if (proxyId) {
         this.refProxy(proxyId, data);
@@ -229,11 +230,14 @@ export default class Proximate {
           const p = this.sendRequest({ [PROXY]: path });
           return p.then.bind(p);
         }
-        if (property === CLOSE_METHOD) {
+        if (property === CLOSE_METHOD && path.length === 1) {
           return () => {
             revoke();
             return this.sendRequest({ [PROXY]: path, [CLOSE]: true });
           };
+        }
+        if (typeof property === 'symbol') {
+          return undefined;
         }
         return this.createProxy([...path, property], target);
       },

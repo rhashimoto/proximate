@@ -247,18 +247,26 @@ describe('Proximate revocation', function() {
     await expectAsync(functionProxies[1]()).toBeResolvedTo(f());
   });
 
-  it('close method', async () => {
+  it('close method should work', async () => {
     const o = Proximate.enableProxy({
-      value: 8
+      value: 8,
+      sub: {
+        value: 12
+      }
     });
-    const objectUnderTest = Proximate.create(port1, { target: () => o, debug: 'foo' });
+    const objectUnderTest = Proximate.create(port1, { target: () => o });
     const proxy = Proximate.create(port2);
     
     const op = await proxy();
     expect(await op.value).toEqual(o.value);
+    expect(await op.sub.value).toEqual(o.sub.value);
 
-    op[Proximate.close] && await op[Proximate.close]();
+    expect(op[Proximate.close]).toBeDefined();
+    expect(op.sub[Proximate.close]).toBeUndefined();
+
+    await op[Proximate.close]();
     expect(() => op.value).toThrow();
+    expect(() => op.sub.value).toThrow();
   });
 });
 
