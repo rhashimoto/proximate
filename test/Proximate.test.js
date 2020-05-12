@@ -1,4 +1,4 @@
-import Proximate from '../dist/es/Proximate.min.js';
+import Proximate from '../dist/es/Proximate.js';
 
 describe('Proximate.create()', function() {
   let port1, port2;
@@ -94,6 +94,28 @@ describe('Proximate marshalling', function() {
       }
     };
     const objectProxy = await proxy(Proximate.enableProxy(o));
+    expect(await objectProxy.value).toBe(o.value);
+    expect(await objectProxy.f()).toEqual(o.f());
+  });
+
+  it('should pass proxies with passByProxy', async () => {
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
+    
+    const proxy = Proximate.create(port2, {
+      passByProxy: (obj) => true
+    });
+    
+    const f = () => 91;
+    const functionProxy = await proxy(f);
+    expect(await functionProxy()).toEqual(f());
+
+    const o = {
+      value: 10,
+      f() {
+        return this.value;
+      }
+    };
+    const objectProxy = await proxy(o);
     expect(await objectProxy.value).toBe(o.value);
     expect(await objectProxy.f()).toEqual(o.f());
   });

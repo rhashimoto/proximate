@@ -38,6 +38,13 @@ function nonce(length = 24): string {
   return value.substring(0, length);
 }
 
+type PassByProxy = (any) => boolean;
+
+interface Options {
+  target?: any,
+  passByProxy?: PassByProxy | PassByProxy[]
+}
+
 // MessageChannel communications wrapper. Only the static functions on
 // this class are used for the public API. Class instances are only
 // used internally.
@@ -45,16 +52,19 @@ export default class Proximate {
   static close = CLOSE_METHOD;
   static debug = DEBUG_METHOD;
 
-  private messagePort: MessagePort;
+  private passByProxy: PassByProxy[];
   private defaultProxyId: string = nonce();
   private debug: any;
 
-  private constructor(messagePort: MessagePort) {
+  private constructor(
+    private messagePort: MessagePort,
+    passAsProxy: PassByProxy | PassByProxy[] = []) {
     if (messagePort[RELAY_MARKER]) throw new Error('MessagePort in use');
     messagePort[RELAY_MARKER] = this.handleMessage.bind(this);
     messagePort.addEventListener('message', messagePort[RELAY_MARKER]);
     messagePort.start?.();
     this.messagePort = messagePort;
+    this.passByProxy = [passAsProxy].flat();
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -151,6 +161,9 @@ export default class Proximate {
   // because some will be sent by proxy.
   private serialize(data: any) {
     if (data === Object(data)) {
+      if (this.passByProxy.some(predicate => predicate(data))) {
+        Proximate.enableProxy(data);
+      }
       const proxyId = data[PROXY_MARKER];
       if (proxyId) {
         proxies.set(proxyId, data);
@@ -241,8 +254,8 @@ export default class Proximate {
   // that can be called by proxy by the other endpoint.
   public static create(
     messagePort: MessagePort,
-    options: any = {}) {
-    const relay = new Proximate(messagePort);
+    options: Options = {}) {
+    const relay = new Proximate(messagePort, options.passByProxy);
     proxies.set(relay.defaultProxyId, options.target);
 
     // The ES6 Proxy we return must be created with a function target
