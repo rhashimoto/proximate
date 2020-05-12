@@ -215,7 +215,7 @@ describe('Proximate member access', function() {
   });
 });
 
-describe('Proximate.revokeProxies()', function() {
+describe('Proximate revocation', function() {
   let port1, port2;
   beforeEach(() => {
     const channel = new MessageChannel();
@@ -228,7 +228,7 @@ describe('Proximate.revokeProxies()', function() {
     port2.close();
   });
 
-  it('should work', async () => {
+  it('revokeProxies() should work', async () => {
     let functionProxies = [];
     const objectUnderTest = Proximate.create(port1, {
       target: f => functionProxies.push(f)
@@ -245,6 +245,20 @@ describe('Proximate.revokeProxies()', function() {
     
     await expectAsync(functionProxies[0]()).toBeRejected();
     await expectAsync(functionProxies[1]()).toBeResolvedTo(f());
+  });
+
+  it('close method', async () => {
+    const o = Proximate.enableProxy({
+      value: 8
+    });
+    const objectUnderTest = Proximate.create(port1, { target: () => o, debug: 'foo' });
+    const proxy = Proximate.create(port2);
+    
+    const op = await proxy();
+    expect(await op.value).toEqual(o.value);
+
+    op[Proximate.close] && await op[Proximate.close]();
+    expect(() => op.value).toThrow();
   });
 });
 

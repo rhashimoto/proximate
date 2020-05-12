@@ -18,7 +18,8 @@ module.exports = function(config) {
       {
         pattern: 'src/**/*',
         included: false,
-        watched: false
+        watched: false,
+        nocache: true
       },
       {
         pattern: 'dist/**/*',

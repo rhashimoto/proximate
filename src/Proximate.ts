@@ -12,12 +12,15 @@ const RESULT = 'r';// Serialized result.
 const ERROR = 'e'; // Serialized exception. Also used for serialization.
 const PROXY = 'p'; // Array of strings at top level. Also used for serialization.
 const DATA = 'd';  // Not a top-level key, only used for serialization.
+const CLOSE = 'c';
+
+type ProxyEntry = { target: any, count: number };
 
 // Global mapping of proxy id to local object. When a proxy for an
 // object is sent to another endpoint, we give it an id (a nonce) and
 // send that over the wire. When the other endpoint uses the proxy, it
 // sends the id back and we use this map to retrieve the object.
-const proxies = new Map<string, any>();
+const proxies = new Map<string, ProxyEntry>();
 
 // Object to transferables mapping from Proximate.transfer().
 const transfers = new Map<any, Transferable[]>();
@@ -42,7 +45,8 @@ type PassByProxy = (any) => boolean;
 
 interface Options {
   target?: any,
-  passByProxy?: PassByProxy | PassByProxy[]
+  passByProxy?: PassByProxy | PassByProxy[],
+  debug?: any
 }
 
 // MessageChannel communications wrapper. Only the static functions on
@@ -92,21 +96,24 @@ export default class Proximate {
       // the proxy id and the last element (if any) is the method
       // name. An empty string proxy id maps to the default proxy.
       const path = message[PROXY].slice();
-      let receiver = proxies.get(path.shift() || this.defaultProxyId);
-      if (!receiver) throw new Error(`no proxy '${message[PROXY][0]}' (revoked?)`);
-      const settable = receiver.hasOwnProperty(SETTABLE_MARKER);
+      const proxyId = path.shift();
+      let { target } = proxies.get(proxyId || this.defaultProxyId);
+      if (!target) throw new Error(`no proxy '${message[PROXY][0]}' (revoked?)`);
+      const settable = target.hasOwnProperty(SETTABLE_MARKER);
       const member = path.pop();
 
       // Dereference any remaining elements of the path to get the
       // direct receiver.
-      receiver = path.reduce((obj, property) => obj[property], receiver);
+      target = path.reduce((obj, property) => obj[property], target);
 
       let result: any;
       if (message.hasOwnProperty(ARGS)) {
         // Function call.
-        const f = member ? receiver[member] : receiver;
+        const f = member ? target[member] : target;
         const args = message[ARGS].map(arg => this.deserialize(arg));
-        result = await f.apply(receiver, args);
+        result = await f.apply(target, args);
+      } else if (message.hasOwnProperty(CLOSE)) {
+        this.derefProxy(proxyId)
       } else {
         // Member access.
         if (message.hasOwnProperty(DATA)) {
@@ -114,9 +121,9 @@ export default class Proximate {
               console.warn('proxied object not settable');
               throw new Error('proxied object not settable');
             }
-            receiver[member] = this.deserialize(message[DATA]);
+            target[member] = this.deserialize(message[DATA]);
         } else {
-          result = await receiver[member];
+          result = await target[member];
         }
       }
 
@@ -166,7 +173,7 @@ export default class Proximate {
       }
       const proxyId = data[PROXY_MARKER];
       if (proxyId) {
-        proxies.set(proxyId, data);
+        this.refProxy(proxyId, data);
         return { [PROXY]: proxyId };
       } else if (data instanceof Error) {
         return {
@@ -195,14 +202,13 @@ export default class Proximate {
   }
 
   // Create an ES6 Proxy to handle member get and function and method calls.
-  // Member set is not supported for safety. Other intercepts are not
-  // supported out of laziness. The first element of the path is the
-  // proxyId, which is the empty string for the default Proximate proxy.
-  // Otherwise it is the nonce attached by Proximate.enableProxy().
+  // The first element of the path is the proxyId, which is the empty string
+  // for the default Proximate proxy. Otherwise it is the nonce attached by
+  // Proximate.enableProxy().
   private createProxy(path: (string|number|symbol)[], obj: any = function() {}) {
     // A Proxy can only be passed by proxy so mark it.
     obj[PROXY_MARKER] = nonce();
-    const proxy = new Proxy(obj, {
+    const { proxy, revoke } = Proxy.revocable(obj, {
       apply: (target, _, args: any[]) => {
         const transferables = args.flatMap(arg => {
           const result = transfers.get(arg) || [];
@@ -222,6 +228,12 @@ export default class Proximate {
           if (path.length === 1) return { then: () => proxy };
           const p = this.sendRequest({ [PROXY]: path });
           return p.then.bind(p);
+        }
+        if (property === CLOSE_METHOD) {
+          return () => {
+            revoke();
+            return this.sendRequest({ [PROXY]: path, [CLOSE]: true });
+          };
         }
         return this.createProxy([...path, property], target);
       },
@@ -250,13 +262,34 @@ export default class Proximate {
     });
   };
   
+  private refProxy(id: string, target: any) {
+    const proxyEntry = proxies.get(id) || { target, count: 0 };
+    proxyEntry.count++;
+    proxies.set(id, proxyEntry);
+  }
+
+  private derefProxy(id: string) {
+    const proxyEntry = proxies.get(id);
+    if (proxyEntry) {
+      if (--proxyEntry.count) {
+        proxies.set(id, proxyEntry);
+      } else {
+        proxies.delete(id);
+      }
+    }
+  }
+  
   // Wrap a MessagePort with a Proxy and optionally provide an object
   // that can be called by proxy by the other endpoint.
   public static create(
     messagePort: MessagePort,
     options: Options = {}) {
     const relay = new Proximate(messagePort, options.passByProxy);
-    proxies.set(relay.defaultProxyId, options.target);
+    relay.debug = options.debug;
+
+    if  (options.target) {
+      relay.refProxy(relay.defaultProxyId, options.target);
+    }
 
     // The ES6 Proxy we return must be created with a function target
     // in case the other endpoint provides a function to its
@@ -266,9 +299,11 @@ export default class Proximate {
       messagePort.removeEventListener('message', messagePort[RELAY_MARKER]);
       delete messagePort[RELAY_MARKER];
       messagePort.close?.();
-      proxies.delete(relay.defaultProxyId);
+
+      if (options.target) {
+        relay.derefProxy(relay.defaultProxyId);
+      }
     };
-    target[DEBUG_METHOD] = (label) => relay.debug = label;
     
     return relay.createProxy([''], target);
   }
