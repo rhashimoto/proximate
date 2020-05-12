@@ -14,7 +14,7 @@ describe('Proximate.create()', function() {
   });
 
   it('should work with a function', async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
     
     const proxy = Proximate.create(port2);
     const value = 17;
@@ -24,7 +24,9 @@ describe('Proximate.create()', function() {
 
   it('should work with an object', async () => {
     const objectUnderTest = Proximate.create(port1, {
-      foo: value => value
+      target: {
+        foo: value => value
+      }
     });
 
     const proxy = Proximate.create(port2);
@@ -48,7 +50,7 @@ describe('Proximate marshalling', function() {
   });
 
   it('should pass primitives', async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
 
     const proxy = Proximate.create(port2);
     expect(await proxy(null)).toBe(null);
@@ -59,7 +61,7 @@ describe('Proximate marshalling', function() {
   });
 
   it('should pass arrays', async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
 
     const proxy = Proximate.create(port2);
     expect(await proxy([])).toEqual([]);
@@ -68,7 +70,7 @@ describe('Proximate marshalling', function() {
   });
 
   it('should pass objects', async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
 
     const proxy = Proximate.create(port2);
     expect(await proxy({})).toEqual({});
@@ -77,7 +79,7 @@ describe('Proximate marshalling', function() {
   });
 
   it('should pass proxies', async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
     
     const proxy = Proximate.create(port2);
     
@@ -97,7 +99,7 @@ describe('Proximate marshalling', function() {
   });
 
   it("should pass Error", async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
 
     const proxy = Proximate.create(port2);
     let error;
@@ -111,7 +113,9 @@ describe('Proximate marshalling', function() {
   });
   
   it('should pass transferables', async () => {
-    const objectUnderTest = Proximate.create(port1, value => Proximate.transfer(value, [value]));
+    const objectUnderTest = Proximate.create(port1, {
+      target: value => Proximate.transfer(value, [value])
+    });
 
     const proxy = Proximate.create(port2);
 
@@ -138,7 +142,7 @@ describe('Proximate member access', function() {
   });
 
   it('should get', async () => {
-    const objectUnderTest = Proximate.create(port1, value => value);
+    const objectUnderTest = Proximate.create(port1, { target: value => value });
     
     const proxy = Proximate.create(port2);
     
@@ -153,7 +157,7 @@ describe('Proximate member access', function() {
     const o = {
       value: 1
     };
-    const objectUnderTest = Proximate.create(port1, o);
+    const objectUnderTest = Proximate.create(port1, { target: o });
     const proxy = Proximate.create(port2);
 
     proxy.value = 4321;
@@ -165,7 +169,7 @@ describe('Proximate member access', function() {
     const o = Proximate.settable({
       value: 1
     });
-    const objectUnderTest = Proximate.create(port1, o);
+    const objectUnderTest = Proximate.create(port1, { target: o });
     const proxy = Proximate.create(port2);
 
     proxy.value = 4321;
@@ -176,7 +180,7 @@ describe('Proximate member access', function() {
   it('should support multi-level', async() => {
     const o = Proximate.settable({
     });
-    const objectUnderTest = Proximate.create(port1, o);
+    const objectUnderTest = Proximate.create(port1, { target: o });
     const proxy = Proximate.create(port2);
     
     proxy.sub = { a: 42 };
@@ -204,8 +208,8 @@ describe('Proximate.revokeProxies()', function() {
 
   it('should work', async () => {
     let functionProxies = [];
-    const objectUnderTest = Proximate.create(port1, f => {
-      functionProxies.push(f);
+    const objectUnderTest = Proximate.create(port1, {
+      target: f => functionProxies.push(f)
     });
 
     const proxy = Proximate.create(port2);
@@ -229,7 +233,7 @@ describe('Proximate.portify()', function() {
       iframe.onload = () => resolve(iframe);
       iframe.srcdoc = `<script type="module">
         import Proximate from '/dist/es/Proximate.js';
-        Proximate.create(Proximate.portify(window.parent), (value) => value);
+        Proximate.create(Proximate.portify(window.parent), { target: (value) => value });
       </script>`;
       document.body.appendChild(iframe);
     });

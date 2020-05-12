@@ -53,7 +53,7 @@ export default class Proximate {
     if (messagePort[RELAY_MARKER]) throw new Error('MessagePort in use');
     messagePort[RELAY_MARKER] = this.handleMessage.bind(this);
     messagePort.addEventListener('message', messagePort[RELAY_MARKER]);
-    messagePort.start && messagePort.start();
+    messagePort.start?.();
     this.messagePort = messagePort;
   }
 
@@ -239,9 +239,11 @@ export default class Proximate {
   
   // Wrap a MessagePort with a Proxy and optionally provide an object
   // that can be called by proxy by the other endpoint.
-  public static create(messagePort: MessagePort, obj: any = {}) {
+  public static create(
+    messagePort: MessagePort,
+    options: any = {}) {
     const relay = new Proximate(messagePort);
-    proxies.set(relay.defaultProxyId, obj);
+    proxies.set(relay.defaultProxyId, options.target);
 
     // The ES6 Proxy we return must be created with a function target
     // in case the other endpoint provides a function to its
@@ -250,7 +252,7 @@ export default class Proximate {
     target[CLOSE_METHOD] = () => {
       messagePort.removeEventListener('message', messagePort[RELAY_MARKER]);
       delete messagePort[RELAY_MARKER];
-      messagePort.close && messagePort.close();
+      messagePort.close?.();
       proxies.delete(relay.defaultProxyId);
     };
     target[DEBUG_METHOD] = (label) => relay.debug = label;
