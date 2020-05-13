@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Proxy-based RPC over MessageChannel",
   "main": "dist/umd/Proximate.js",
-  "module": "dist/esm/Proximate.js",
+  "module": "dist/es/Proximate.js",
   "types": "dist/Proximate.d.ts",
   "scripts": {
     "build": "rollup -c && npm run build:declaration",
