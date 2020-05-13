@@ -2,9 +2,9 @@
   "name": "proximate",
   "version": "0.1.0",
   "description": "Proxy-based RPC over MessageChannel",
-  "main": "dist/umd/proximate.js",
-  "module": "dist/esm/proximate.js",
-  "types": "dist/proximate.d.ts",
+  "main": "dist/umd/Proximate.js",
+  "module": "dist/esm/Proximate.js",
+  "types": "dist/Proximate.d.ts",
   "scripts": {
     "build": "rollup -c && npm run build:declaration",
     "build:declaration": "tsc --declaration --emitDeclarationOnly --outDir dist/",
