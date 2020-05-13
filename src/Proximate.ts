@@ -232,7 +232,7 @@ export default class Proximate {
       },
       
       get: (target, property, _) => {
-        if (property in target) return target[property];
+        if (typeof property === 'symbol' && property in target) return target[property];
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
           const p = this.sendRequest({ [PROXY]: path });

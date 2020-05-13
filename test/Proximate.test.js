@@ -34,6 +34,13 @@ describe('Proximate.create()', function() {
     const result = await proxy.foo(value);
     expect(result).toBe(value);
   });
+
+  it('should allow member named bind', async () => {
+    const o = { bind: 3 };
+    const objectUnderTest = Proximate.create(port1, { target: o });
+    const proxy = Proximate.create(port2);
+    expect(await proxy.bind).toBe(o.bind);
+  });
 });
 
 describe('Proximate marshalling', function() {
