@@ -49,6 +49,14 @@ interface Options {
   debug?: any
 }
 
+interface Endpoint {
+  addEventListener(type: string, handler: (MessageEvent) => void): void;
+  removeEventListener(type: string, handler: (MessageEvent) => void): void;
+  postMessage(data: any, transferables?: Transferable[]): void;
+  start?(): void;
+  close?(): void;
+}
+
 // MessageChannel communications wrapper. Only the static functions on
 // this class are used for the public API. Class instances are only
 // used internally.
@@ -60,13 +68,13 @@ export default class Proximate {
   private debug: any;
 
   private constructor(
-    private messagePort: MessagePort,
+    private endpoint: Endpoint,
     passAsProxy: PassByProxy | PassByProxy[] = []) {
-    if (messagePort[RELAY_MARKER]) throw new Error('MessagePort in use');
-    messagePort[RELAY_MARKER] = this.handleMessage.bind(this);
-    messagePort.addEventListener('message', messagePort[RELAY_MARKER]);
-    messagePort.start?.();
-    this.messagePort = messagePort;
+    if (endpoint[RELAY_MARKER]) throw new Error('MessagePort in use');
+    endpoint[RELAY_MARKER] = this.handleMessage.bind(this);
+    endpoint.addEventListener('message', endpoint[RELAY_MARKER]);
+    endpoint.start?.();
+    this.endpoint = endpoint;
     this.passByProxy = [passAsProxy].flat();
   }
 
@@ -136,7 +144,7 @@ export default class Proximate {
       response[ERROR] = this.serialize(e);
     }
 
-    this.messagePort.postMessage(response, transferList);
+    this.endpoint.postMessage(response, transferList);
   }
   
   private isResponse(message: object) {
@@ -262,7 +270,7 @@ export default class Proximate {
     return new Promise((resolve, reject) => {
       request[NONCE] = nonce();
       requests.set(request[NONCE], { resolve, reject });
-      this.messagePort.postMessage(request, transferables);
+      this.endpoint.postMessage(request, transferables);
     });
   };
   
@@ -286,9 +294,9 @@ export default class Proximate {
   // Wrap a MessagePort with a Proxy and optionally provide an object
   // that can be called by proxy by the other endpoint.
   public static create(
-    messagePort: MessagePort,
+    endpoint: Endpoint,
     options: Options = {}) {
-    const relay = new Proximate(messagePort, options.passByProxy);
+    const relay = new Proximate(endpoint, options.passByProxy);
     relay.debug = options.debug;
 
     if  (options.target) {
@@ -300,9 +308,9 @@ export default class Proximate {
     // Proximate.create() invocation that we want to call.
     const target = function() {};
     target[CLOSE_METHOD] = () => {
-      messagePort.removeEventListener('message', messagePort[RELAY_MARKER]);
-      delete messagePort[RELAY_MARKER];
-      messagePort.close?.();
+      endpoint.removeEventListener('message', endpoint[RELAY_MARKER]);
+      delete endpoint[RELAY_MARKER];
+      endpoint.close?.();
 
       if (options.target) {
         relay.derefProxy(relay.defaultProxyId);
