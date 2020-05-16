@@ -11,6 +11,11 @@ interface Options {
   debug?: string
 }
 
+type RequestSettler = {
+  resolve: (result: any) => void;
+  reject: (error: Error) => void;
+};
+
 // Extensible object serialization.
 export interface Protocol<T> {
   canHandle(data: unknown): data is T;
@@ -89,21 +94,24 @@ function clearReceiverRefs(receiver: any) {
 }
 
 const release = Symbol('release');
+const close = Symbol('close');
 
 export class Proximate {
   private static endpoints = new WeakMap<Endpoint, Proximate>();
 
   private debug: string;
   private defaultId: string;
-  private requests = new Map<string,  { resolve: (x: any) => void, reject: (x: Error) => void }>();
+  private requests = new Map<string,  RequestSettler>();
+  private proxies = new Map<string, number>();
+  private close: () => void;
 
-  async handleMessage(event: MessageEvent) {
+  private async handleMessage(event: MessageEvent) {
     const message = event.data;
     if (this.debug) console.debug(this.debug, message);
 
     const endpoint = (event.source || event.target) as unknown as Endpoint;
     if (message.id && message.path) {
-      // Handle response.
+      // Handle request (build response).
       const response: any = { id: message.id };
       let transferables = [];
       try {
@@ -125,6 +133,14 @@ export class Proximate {
           result = await receiver.apply(parent, args);
         } else if (message.release) {
           decReceiverRef(receiver);
+        } else if (message.close) {
+          const remoteProxies = message.close as Map<string, number>;
+          remoteProxies.forEach((count, id) => {
+            for (let i = 0; i < count; ++i) {
+              decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
+            }
+          });
+          result = this.proxies;
         } else {
           // Member access.
           if (message.hasOwnProperty('value')) {
@@ -138,6 +154,7 @@ export class Proximate {
         [response.error, transferables] = this.serialize(e);
       }
       endpoint.postMessage(response, transferables);
+      if (message.close) this.close?.();
     } else if (message.id && this.requests.has(message.id)) {
       // Handle response.
       const request = this.requests.get(message.id);
@@ -153,7 +170,7 @@ export class Proximate {
     }
   }
 
-  serialize(data: any): [typeof data, Transferable[]] {
+  private serialize(data: any): [typeof data, Transferable[]] {
     for (const [key, handler] of Proximate.protocols.entries()) {
       if (handler.canHandle(data)) {
         const serialized = handler.serialize(data, incReceiverRef);
@@ -169,7 +186,7 @@ export class Proximate {
     return [data, []];
   }
 
-  deserialize(endpoint: Endpoint, data: any) {
+  private deserialize(endpoint: Endpoint, data: any) {
     if (data === Object(data)) {
       if (data.type) {
         const handler = Proximate.protocols.get(data.type);
@@ -181,7 +198,7 @@ export class Proximate {
     return data;
   }
 
-  sendRequest(endpoint: Endpoint, request, transferables: Transferable[] = []) {
+  private sendRequest(endpoint: Endpoint, request, transferables: Transferable[] = []) {
     return new Promise((resolve, reject) => {
       request.id = nonce();
       this.requests.set(request.id, { resolve, reject });
@@ -189,13 +206,33 @@ export class Proximate {
     });
   }
 
-  createLocalProxy(endpoint: Endpoint, path: (string | number)[] = [nonce()]) {
+  private createLocalProxy(endpoint: Endpoint, path: (string | number)[] = [nonce()]) {
+    const id = path[0] as string;
     const { proxy, revoke } = Proxy.revocable(() => {}, {
       get: (_target, property) => {
         if (property === release && path.length === 1) {
           return () => {
             revoke();
+            if (this.proxies.get(id) > 1) {
+              this.proxies.set(id, this.proxies.get(id) - 1);
+            } else {
+              this.proxies.delete(id);
+            }
             return this.sendRequest(endpoint, { path, release: true });
+          }
+        }
+        if (property === close && path.length === 1) {
+          return async () => {
+            const remoteProxies = await this.sendRequest(endpoint, {
+              path,
+              close: this.proxies
+            }) as Map<string, number>;
+            remoteProxies.forEach((count, id) => {
+              for (let i = 0; i < count; ++i) {
+                decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
+              }
+            });
+            this.close?.();
           }
         }
         if (typeof property === 'symbol') return undefined;
@@ -225,6 +262,8 @@ export class Proximate {
         }, serialized.map(value => value[1]).flat());
       }
     });
+    
+    this.proxies.set(id, (this.proxies.get(id) || 0) + 1);
     return proxy;
   }
 
@@ -233,9 +272,14 @@ export class Proximate {
   static wrap(endpoint: Endpoint, options: Options = {}) {
     if (Proximate.endpoints.has(endpoint)) throw new Error('endpoint already wrapped');
     const instance = new Proximate();
-    Proximate.endpoints.set(endpoint, instance);
-    endpoint.addEventListener('message', event => instance.handleMessage(event));
+    const listener = (event: MessageEvent) => instance.handleMessage(event);
+    instance.close = () => {
+      endpoint.removeEventListener('message', listener);
+      endpoint.close?.();
+    }
+    endpoint.addEventListener('message', listener);
     endpoint.start?.();
+    Proximate.endpoints.set(endpoint, instance);
 
     instance.debug = options.debug;
     if (options.receiver) {
@@ -246,6 +290,10 @@ export class Proximate {
 
   static release(proxy: any) {
     return proxy[release]?.();
+  }
+
+  static close(proxy: any) {
+    return proxy[close]?.();
   }
 
   static revokeProxies(receiver: any) {

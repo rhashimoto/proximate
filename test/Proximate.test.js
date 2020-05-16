@@ -88,9 +88,9 @@ describe('Marshalling', function() {
   it("should pass Error", async () => {
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: value => value,
-      debug: 'receiver'
+      debug: null
     });
-    const proxy = Proximate.wrap(port2, { debug: 'proxy' });
+    const proxy = Proximate.wrap(port2, { debug: null });
 
     let error;
     try {
@@ -105,9 +105,9 @@ describe('Marshalling', function() {
   it('should pass transferables', async () => {
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: value => value,
-      debug: 'receiver'
+      debug: null
     });
-    const proxy = Proximate.wrap(port2, { debug: 'proxy' });
+    const proxy = Proximate.wrap(port2, { debug: null });
 
     Proximate.protocols.set('Int8Array', {
       canHandle(data) {
@@ -131,9 +131,9 @@ describe('Marshalling', function() {
   it('should pass proxies', async () => {
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: value => value,
-      debug: 'receiver'
+      debug: null
     });
-    const proxy = Proximate.wrap(port2, { debug: 'proxy' });
+    const proxy = Proximate.wrap(port2, { debug: null });
 
     class FunctionProtocol extends ProxyProtocol {
       canHandle(data) {
@@ -145,6 +145,8 @@ describe('Marshalling', function() {
     const f = () => 91;
     const functionProxy = await proxy(f);
     expect(await functionProxy()).toEqual(f());
+
+    Proximate.protocols.delete('function');
   });
 });
 
@@ -168,9 +170,9 @@ describe('Object member access', function() {
     };
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: obj,
-      debug: 'receiver'
+      debug: null
     });
-    const proxy = Proximate.wrap(port2, { debug: 'proxy' });
+    const proxy = Proximate.wrap(port2, { debug: null });
 
     expect(await proxy.value).toBe(obj.value);
     expect(await proxy.foo.bar).toBe(obj.foo.bar);
@@ -185,9 +187,9 @@ describe('Object member access', function() {
     };
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: obj,
-      debug: 'receiver'
+      debug: null
     });
-    const proxy = Proximate.wrap(port2, { debug: 'proxy' });
+    const proxy = Proximate.wrap(port2, { debug: null });
 
     proxy.value = 21;
     expect(await proxy.value).toBe(obj.value);
@@ -218,9 +220,9 @@ describe('revokeProxies()', function() {
     const f = () => 42;
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: f,
-      debug: 'receiver'
+      debug: null
     });
-    const proxy = Proximate.wrap(port2, { debug: 'proxy' });
+    const proxy = Proximate.wrap(port2, { debug: null });
 
     expect(await proxy()).toBe(f());
 
@@ -238,17 +240,18 @@ describe('portify()', function() {
         import { Proximate } from '/dist/es/Proximate.js';
         Proximate.wrap(Proximate.portify(window.parent), {
           receiver: (value) => value,
-          debug: 'iframe'
+          debug: false
         });
       </script>`;
       document.body.appendChild(iframe);
     });
 
     const proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), {
-      debug: 'main'
+      debug: false
     });
-    const data = 'Lorem ipsum';
+    const data = 'Four score';
     expect(await proxy(data)).toBe(data);
+    await Proximate.close(proxy);
     iframe.remove();
   });
 
@@ -258,20 +261,22 @@ describe('portify()', function() {
       import { Proximate } from '/dist/es/Proximate.js';
       const proxy = Proximate.wrap(Proximate.portify(window.parent), {
         receiver: (value) => value,
-        debug: 'iframe'
+        debug: false
       });
       proxy('Lorem ipsum');
     </script>`;
     document.body.appendChild(iframe);
 
+    let proxy;
     const p = new Promise(resolve => {
-      Proximate.wrap(Proximate.portify(iframe.contentWindow), {
+      proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), {
         receiver: resolve,
-        debug: 'main'
+        debug: false
       });
     });
 
     expect(await p).toBe('Lorem ipsum');
+    await Proximate.close(proxy);
     iframe.remove();
   });
 });
