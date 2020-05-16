@@ -101,8 +101,9 @@ function clearReceiverRefs(receiver: any) {
 }
 
 // These symbols are used to key special functions on Proxy instances.
-const release = Symbol('release');
-const close = Symbol('close');
+const RELEASE = Symbol('release');
+const CLOSE = Symbol('close');
+const PROXIES = Symbol('proxies');
 
 export class Proximate {
   private debug: (message) => void;
@@ -127,10 +128,8 @@ export class Proximate {
   // Clean up and close endpoint (assigned in wrap).
   private close: () => void;
 
-  private async handleMessage(event: MessageEvent) {
-    this.debug?.(event);
-    const message = event.data;
-    const endpoint = (event.source || event.target) as unknown as Endpoint;
+  private async handleMessage(endpoint: Endpoint, message: any) {
+    this.debug?.(message);
     if (message.id && message.path) {
       // Handle request (build response).
       const response: any = { id: message.id };
@@ -233,32 +232,39 @@ export class Proximate {
 
   private createLocalProxy(endpoint: Endpoint, path: (string | number)[] = [nonce()]) {
     const id = path[0] as string;
-    const { proxy, revoke } = Proxy.revocable(() => {}, {
+    const proxy = new Proxy(() => {}, {
       get: (_target, property) => {
-        if (!this.close) throw new Error('endpoint closed');
-        if (property === release && path.length === 1) {
-          return () => {
-            revoke();
-            const proxiesForId = this.proxies.get(id);
-            proxiesForId.delete(proxy);
-            if (proxiesForId.size === 0) {
-              this.proxies.delete(id);
-            }
-            return this.sendRequest(endpoint, { path, release: true });
-          }
-        }
-        if (property === close && path.length === 1) {
-          return async () => {
-            const remoteProxies = await this.sendRequest(endpoint, {
-              path,
-              close: this.proxyCounts()
-            }) as Map<string, number>;
-            remoteProxies.forEach((count, id) => {
-              for (let i = 0; i < count; ++i) {
-                decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
+        if (path.length === 1) {
+          if (property === RELEASE) {
+            return () => {
+              const proxiesForId = this.proxies.get(id);
+              proxiesForId.delete(proxy);
+              if (proxiesForId.size === 0) {
+                this.proxies.delete(id);
               }
-            });
-            this.close?.();
+              return this.sendRequest(endpoint, { path, release: true });
+            }
+          }
+          if (id === '') {
+            // Only available on Proxy returned from wrap().
+            if (property === CLOSE) {
+              return async () => {
+                const remoteProxies = await this.sendRequest(endpoint, {
+                  path,
+                  close: this.proxyCounts()
+                }) as Map<string, number>;
+                remoteProxies.forEach((count, id) => {
+                  for (let i = 0; i < count; ++i) {
+                    decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
+                  }
+                });
+                this.proxies.clear();
+                this.close?.();
+              }
+            }
+            if (property === PROXIES) {
+              return () => this.proxies;
+            }
           }
         }
         if (typeof property === 'symbol') return undefined;
@@ -271,7 +277,6 @@ export class Proximate {
       },
 
       set: (_target, property, value) => {
-        if (!this.close) throw new Error('endpoint closed');
         if (typeof property === 'symbol') return false;
         const [wireValue, transferables] = this.serialize(value);
         this.sendRequest(endpoint, {
@@ -282,7 +287,6 @@ export class Proximate {
       },
 
       apply: (_target, _, args: any[]) => {
-        if (!this.close) throw new Error('endpoint closed');
         const serialized = args.map(arg => this.serialize(arg));
         return this.sendRequest(endpoint, {
           path,
@@ -318,7 +322,7 @@ export class Proximate {
   //  debug     A function passed incoming MessageEvent instances.
   static wrap(endpoint: Endpoint, options: Options = {}) {
     const instance = new Proximate();
-    const listener = (event: MessageEvent) => instance.handleMessage(event);
+    const listener = (event: MessageEvent) => instance.handleMessage(endpoint, event.data);
     instance.close = () => {
       endpoint.removeEventListener('message', listener);
       endpoint.close?.();
@@ -334,20 +338,24 @@ export class Proximate {
     return instance.createLocalProxy(endpoint, ['']);
   }
 
-  // Revoke the proxy and release its remote resources.
+  // Release remote resources.
   static release(proxy: any) {
-    return proxy[release]?.();
+    return proxy[RELEASE]();
   }
 
   // Close the endpoint the proxy argument is on. All proxies on the
   // same endpoint will be released.
   static close(proxy: any) {
-    return proxy[close]?.();
+    return proxy[CLOSE]?.();
   }
 
   // Disable all remote proxies for a local receiver.
   static revokeProxies(receiver: any) {
     clearReceiverRefs(receiver);
+  }
+
+  static debugProxies(primary) {
+    return primary[PROXIES]();
   }
 
   // Wrap a Window with the MessagePort interface. To listen to

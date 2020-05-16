@@ -216,6 +216,33 @@ describe('Object member access', function() {
   });
 });
 
+describe('release', function() {
+  let port1, port2;
+  beforeEach(() => {
+    ({ port1, port2 } = new MessageChannel());
+  });
+
+  afterEach(() => {
+    port1.close();
+    port2.close();
+  });
+
+  fit('should work', async () => {
+    const f = () => 42;
+    const objectUnderTest = Proximate.wrap(port1, {
+      receiver: f,
+      debug: null
+    });
+    const proxy = Proximate.wrap(port2, { debug: null });
+
+    expect(await proxy()).toBe(f());
+
+    Proximate.release(proxy);
+    await expectAsync(proxy()).toBeRejected();
+    await Proximate.close(proxy);
+  });
+});
+
 describe('revokeProxies()', function() {
   let port1, port2;
   beforeEach(() => {
