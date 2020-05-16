@@ -89,15 +89,10 @@ function decReceiverRef(receiver: any) {
   const id = mapObjectToId.get(receiver);
   if (id) {
     if (--mapIdToObject.get(id).count === 0) {
-      clearReceiverRefs(receiver);
+      mapObjectToId.delete(receiver);
+      mapIdToObject.delete(id);
     }
   }
-}
-
-function clearReceiverRefs(receiver: any) {
-  const id = mapObjectToId.get(receiver);
-  mapObjectToId.delete(receiver);
-  mapIdToObject.delete(id);
 }
 
 // These symbols are used to key special functions on Proxy instances.
@@ -118,11 +113,11 @@ export class Proximate {
   // arrives, this map uses the id to get the request's Promise callbacks.
   private requests = new Map<string,  PromiseCallbacks>();
 
-  // This map holds reference counts for proxy ids from the remote endpoint
-  // wrapped by local Proxy instances. Just before the connection closes,
-  // the map is sent to the remote endpoint to allow reclaiming resources.
-  // This wouldn't be necessary if release() were always called for every
-  // Proxy but it's good insurance.
+  // This map holds a one-to-many mapping from ids to Proxy instances.
+  // When the connection is closed, reference counts derived from this
+  // data is sent to the remote endpoint to reclaim resources. It may
+  // also be accessed via the proxies() static member function for
+  // debugging leaks.
   proxies = new Map<string, Set<any>>();
 
   // Clean up and close endpoint (assigned in wrap).
@@ -304,6 +299,9 @@ export class Proximate {
     return proxy;
   }
 
+  // Convert the one-to-many mapping of ids to proxies into a
+  // map of reference counts for the remote endpoint to reclaim
+  // resources on close.
   private proxyCounts() {
     const result = new Map<string, number>();
     for (const [key, value] of this.proxies.entries()) {
@@ -323,13 +321,13 @@ export class Proximate {
   static wrap(endpoint: Endpoint, options: Options = {}) {
     const instance = new Proximate();
     const listener = (event: MessageEvent) => instance.handleMessage(endpoint, event.data);
+    endpoint.addEventListener('message', listener);
+    endpoint.start?.();
     instance.close = () => {
       endpoint.removeEventListener('message', listener);
       endpoint.close?.();
       instance.close = undefined;
     }
-    endpoint.addEventListener('message', listener);
-    endpoint.start?.();
 
     instance.debug = options.debug;
     if (options.receiver) {
@@ -338,7 +336,8 @@ export class Proximate {
     return instance.createLocalProxy(endpoint, ['']);
   }
 
-  // Release remote resources.
+  // Release remote resources. No further calls to proxy methods should
+  // be made.
   static release(proxy: any) {
     return proxy[RELEASE]();
   }
@@ -349,12 +348,9 @@ export class Proximate {
     return proxy[CLOSE]?.();
   }
 
-  // Disable all remote proxies for a local receiver.
-  static revokeProxies(receiver: any) {
-    clearReceiverRefs(receiver);
-  }
-
-  static debugProxies(primary) {
+  // Get the one-to-many mapping of ids to Proxy instances for debugging
+  // leaks. Must be called with proxy returned directly by wrap().
+  static proxies(primary) {
     return primary[PROXIES]();
   }
 

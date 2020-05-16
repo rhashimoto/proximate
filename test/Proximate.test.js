@@ -227,7 +227,7 @@ describe('release', function() {
     port2.close();
   });
 
-  fit('should work', async () => {
+  it('should work', async () => {
     const f = () => 42;
     const objectUnderTest = Proximate.wrap(port1, {
       receiver: f,
@@ -236,36 +236,11 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2, { debug: null });
 
     expect(await proxy()).toBe(f());
+    expect(Proximate.proxies(proxy).size).toBeGreaterThan(0)
 
     Proximate.release(proxy);
     await expectAsync(proxy()).toBeRejected();
-    await Proximate.close(proxy);
-  });
-});
-
-describe('revokeProxies()', function() {
-  let port1, port2;
-  beforeEach(() => {
-    ({ port1, port2 } = new MessageChannel());
-  });
-
-  afterEach(() => {
-    port1.close();
-    port2.close();
-  });
-
-  it('revokeProxies() should work', async () => {
-    const f = () => 42;
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: f,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
-
-    expect(await proxy()).toBe(f());
-
-    Proximate.revokeProxies(f);
-    await expectAsync(proxy()).toBeRejected();
+    expect(Proximate.proxies(proxy).size).toBe(0)
     await Proximate.close(proxy);
   });
 });
