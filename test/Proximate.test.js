@@ -240,14 +240,14 @@ describe('portify()', function() {
         import { Proximate } from '/dist/es/Proximate.js';
         Proximate.wrap(Proximate.portify(window.parent), {
           receiver: (value) => value,
-          debug: false
+          debug: null
         });
       </script>`;
       document.body.appendChild(iframe);
     });
 
     const proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), {
-      debug: false
+      debug: null
     });
     const data = 'Four score';
     expect(await proxy(data)).toBe(data);
@@ -261,7 +261,7 @@ describe('portify()', function() {
       import { Proximate } from '/dist/es/Proximate.js';
       const proxy = Proximate.wrap(Proximate.portify(window.parent), {
         receiver: (value) => value,
-        debug: false
+        debug: null
       });
       proxy('Lorem ipsum');
     </script>`;
@@ -271,7 +271,7 @@ describe('portify()', function() {
     const p = new Promise(resolve => {
       proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), {
         receiver: resolve,
-        debug: false
+        debug: null
       });
     });
 

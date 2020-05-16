@@ -1,3 +1,4 @@
+// Proximate will wrap any endpoint that looks like a MessagePort.
 interface Endpoint {
   addEventListener(type: string, handler: (event: MessageEvent) => void): void;
   removeEventListener(type: string, handler: (event: MessageEvent) => void): void;
@@ -8,22 +9,25 @@ interface Endpoint {
 
 interface Options {
   receiver?: any,
-  debug?: string
+  debug?: (message: MessageEvent) => void
 }
 
-type RequestSettler = {
+type PromiseCallbacks = {
   resolve: (result: any) => void;
   reject: (error: Error) => void;
 };
 
-// Extensible object serialization.
+// Extensible object serialization. Custom instances of Protocol can be
+// registered in Proximate.protocols with a string key. The typical use
+// is either to pass by proxy or to specify transferables.
 export interface Protocol<T> {
   canHandle(data: unknown): data is T;
   serialize(data: T, registerReceiver: (receiver: any) => string): [any, Transferable[]];
   deserialize(data: any, createProxy: (id: string) => any): T;
 }
 
-// Convenience base class for passing objects by proxy.
+// Convenience base class for passing objects by proxy. Just override
+// canHandle().
 export abstract class ProxyProtocol<T> implements Protocol<T> {
   abstract canHandle(data: any): data is T;
 
@@ -36,6 +40,7 @@ export abstract class ProxyProtocol<T> implements Protocol<T> {
   }
 }
 
+// Protocol to serialize Error instances.
 const errorProtocol: Protocol<Error> = {
   canHandle(data: any): data is Error {
     return data instanceof Error;
@@ -53,6 +58,7 @@ const errorProtocol: Protocol<Error> = {
   }
 };
 
+// Generate a random string id for proxies and requests.
 function nonce(length = 24): string {
   let value = '';
   while (value.length < length) {
@@ -61,9 +67,10 @@ function nonce(length = 24): string {
   return value.substring(0, length);
 }
 
-// Two-way mapping between objects and proxy ids. Reference counting
-// is used to remove associations when all remote proxies have been
-// released.
+// Two-way mapping between objects and proxy ids. This is for looking
+// up local objects that are passed by proxy to remote endpoints.
+// Reference counting is used to remove associations when all remote
+// proxies have been released.
 const mapObjectToId = new WeakMap<any, string>();
 const mapIdToObject = new Map<string, { receiver: any, count: number }>();
 
@@ -93,22 +100,36 @@ function clearReceiverRefs(receiver: any) {
   mapIdToObject.delete(id);
 }
 
+// These symbols are used to key special functions on Proxy instances.
 const release = Symbol('release');
 const close = Symbol('close');
 
 export class Proximate {
-  private static endpoints = new WeakMap<Endpoint, Proximate>();
+  private debug: (message) => void;
 
-  private debug: string;
+  // The receiver passed as an option to wrap() is not sent by proxy,
+  // i.e. its id is not passed over the wire. Instead the remote endpoint
+  // accesses it by convention with the empty string which is converted
+  // locally to this valid id.
   private defaultId: string;
-  private requests = new Map<string,  RequestSettler>();
+
+  // Each request has a nonce id. When a response from the remote endpoint
+  // arrives, this map uses the id to get the request's Promise callbacks.
+  private requests = new Map<string,  PromiseCallbacks>();
+
+  // This map holds reference counts for proxy ids from the remote endpoint
+  // wrapped by local Proxy instances. Just before the connection closes,
+  // the map is sent to the remote endpoint to allow reclaiming resources.
+  // This wouldn't be necessary if release() were always called for every
+  // Proxy but it's good insurance.
   private proxies = new Map<string, number>();
+
+  // Clean up and close endpoint (assigned in wrap).
   private close: () => void;
 
   private async handleMessage(event: MessageEvent) {
+    this.debug?.(event);
     const message = event.data;
-    if (this.debug) console.debug(this.debug, message);
-
     const endpoint = (event.source || event.target) as unknown as Endpoint;
     if (message.id && message.path) {
       // Handle request (build response).
@@ -117,13 +138,13 @@ export class Proximate {
       try {
         const proxyId = message.path.shift() || this.defaultId;
         const [tail] = message.path.slice(-1);
-        if (!mapIdToObject.get(proxyId)) throw new Error(`invalid proxy '${proxyId}`);
+        if (!mapIdToObject.has(proxyId)) throw new Error(`invalid proxy '${proxyId}`);
         let { receiver } = mapIdToObject.get(proxyId);
 
         let parent;
         for (const property of message.path) {
           parent = receiver;
-          receiver = await receiver[property];
+          receiver = receiver[property];
         }
 
         let result;
@@ -132,8 +153,10 @@ export class Proximate {
           const args = message.args.map(arg => this.deserialize(endpoint, arg));
           result = await receiver.apply(parent, args);
         } else if (message.release) {
+          // Remote proxy is released.
           decReceiverRef(receiver);
         } else if (message.close) {
+          // Close endpoint.
           const remoteProxies = message.close as Map<string, number>;
           remoteProxies.forEach((count, id) => {
             for (let i = 0; i < count; ++i) {
@@ -158,6 +181,7 @@ export class Proximate {
     } else if (message.id && this.requests.has(message.id)) {
       // Handle response.
       const request = this.requests.get(message.id);
+      this.requests.delete(message.id);
       if (message.hasOwnProperty('result')) {
         const result = this.deserialize(endpoint, message.result);
         request.resolve(result);
@@ -171,6 +195,7 @@ export class Proximate {
   }
 
   private serialize(data: any): [typeof data, Transferable[]] {
+    // Check for custom serialization.
     for (const [key, handler] of Proximate.protocols.entries()) {
       if (handler.canHandle(data)) {
         const serialized = handler.serialize(data, incReceiverRef);
@@ -189,6 +214,7 @@ export class Proximate {
   private deserialize(endpoint: Endpoint, data: any) {
     if (data === Object(data)) {
       if (data.type) {
+        // Custom serialization.
         const handler = Proximate.protocols.get(data.type);
         if (!handler) throw new Error(`unexpected protocol ${data.type}`);
         return handler.deserialize(data.data, id => this.createLocalProxy(endpoint, [id]));
@@ -210,6 +236,7 @@ export class Proximate {
     const id = path[0] as string;
     const { proxy, revoke } = Proxy.revocable(() => {}, {
       get: (_target, property) => {
+        if (!this.close) throw new Error('endpoint closed');
         if (property === release && path.length === 1) {
           return () => {
             revoke();
@@ -245,6 +272,7 @@ export class Proximate {
       },
 
       set: (_target, property, value) => {
+        if (!this.close) throw new Error('endpoint closed');
         if (typeof property === 'symbol') return false;
         const [wireValue, transferables] = this.serialize(value);
         this.sendRequest(endpoint, {
@@ -255,6 +283,7 @@ export class Proximate {
       },
 
       apply: (_target, _, args: any[]) => {
+        if (!this.close) throw new Error('endpoint closed');
         const serialized = args.map(arg => this.serialize(arg));
         return this.sendRequest(endpoint, {
           path,
@@ -267,19 +296,24 @@ export class Proximate {
     return proxy;
   }
 
+  // Add entries to this map to customize serialization, generally
+  // either to pass by proxy or to specify transferables.
   static protocols = new Map<string, Protocol<unknown>>([['_error', errorProtocol]]);
 
+  // Wrap a MessagePort-like endpoint with a proxy.
+  // Valid options:
+  //  receiver  The object that the remote endpoint proxy accesses.
+  //  debug     A function passed incoming MessageEvent instances.
   static wrap(endpoint: Endpoint, options: Options = {}) {
-    if (Proximate.endpoints.has(endpoint)) throw new Error('endpoint already wrapped');
     const instance = new Proximate();
     const listener = (event: MessageEvent) => instance.handleMessage(event);
     instance.close = () => {
       endpoint.removeEventListener('message', listener);
       endpoint.close?.();
+      instance.close = undefined;
     }
     endpoint.addEventListener('message', listener);
     endpoint.start?.();
-    Proximate.endpoints.set(endpoint, instance);
 
     instance.debug = options.debug;
     if (options.receiver) {
@@ -288,14 +322,18 @@ export class Proximate {
     return instance.createLocalProxy(endpoint, ['']);
   }
 
+  // Revoke the proxy and release its remote resources.
   static release(proxy: any) {
     return proxy[release]?.();
   }
 
+  // Close the endpoint the proxy argument is on. All proxies on the
+  // same endpoint will be released.
   static close(proxy: any) {
     return proxy[close]?.();
   }
 
+  // Disable remote all proxies for the the receiver argument.
   static revokeProxies(receiver: any) {
     clearReceiverRefs(receiver);
   }
