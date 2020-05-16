@@ -122,7 +122,7 @@ export class Proximate {
   // the map is sent to the remote endpoint to allow reclaiming resources.
   // This wouldn't be necessary if release() were always called for every
   // Proxy but it's good insurance.
-  private proxies = new Map<string, number>();
+  proxies = new Map<string, Set<any>>();
 
   // Clean up and close endpoint (assigned in wrap).
   private close: () => void;
@@ -162,7 +162,7 @@ export class Proximate {
               decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
             }
           });
-          result = this.proxies;
+          result = this.proxyCounts();
         } else {
           // Member access.
           if (message.hasOwnProperty('value')) {
@@ -239,9 +239,9 @@ export class Proximate {
         if (property === release && path.length === 1) {
           return () => {
             revoke();
-            if (this.proxies.get(id) > 1) {
-              this.proxies.set(id, this.proxies.get(id) - 1);
-            } else {
+            const proxiesForId = this.proxies.get(id);
+            proxiesForId.delete(proxy);
+            if (proxiesForId.size === 0) {
               this.proxies.delete(id);
             }
             return this.sendRequest(endpoint, { path, release: true });
@@ -251,7 +251,7 @@ export class Proximate {
           return async () => {
             const remoteProxies = await this.sendRequest(endpoint, {
               path,
-              close: this.proxies
+              close: this.proxyCounts()
             }) as Map<string, number>;
             remoteProxies.forEach((count, id) => {
               for (let i = 0; i < count; ++i) {
@@ -291,8 +291,21 @@ export class Proximate {
       }
     });
     
-    this.proxies.set(id, (this.proxies.get(id) || 0) + 1);
+    if (!this.proxies.has(id)) {
+      this.proxies.set(id, new Set());
+    }
+    const proxiesForId = this.proxies.get(id);
+    proxiesForId.add(proxy);
+    this.proxies.set(id, proxiesForId);
     return proxy;
+  }
+
+  private proxyCounts() {
+    const result = new Map<string, number>();
+    for (const [key, value] of this.proxies.entries()) {
+      result.set(key, value.size);
+    }
+    return result;
   }
 
   // Add entries to this map to customize serialization, generally
