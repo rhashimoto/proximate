@@ -138,8 +138,7 @@ export class Proximate {
       try {
         const proxyId = message.path.shift() || this.defaultId;
         const [tail] = message.path.slice(-1);
-        if (!mapIdToObject.has(proxyId)) throw new Error(`invalid proxy '${proxyId}`);
-        let { receiver } = mapIdToObject.get(proxyId);
+        let { receiver } = mapIdToObject.get(proxyId) || { receiver: undefined };
 
         let parent;
         for (const property of message.path) {
@@ -333,7 +332,7 @@ export class Proximate {
     return proxy[close]?.();
   }
 
-  // Disable remote all proxies for the the receiver argument.
+  // Disable all remote proxies for a local receiver.
   static revokeProxies(receiver: any) {
     clearReceiverRefs(receiver);
   }

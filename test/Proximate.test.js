@@ -18,6 +18,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy(42)).toBe(42);
+    await Proximate.close(proxy);
   });
 
   it('should work with an object member variable', async () => {
@@ -27,6 +28,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo).toBe('bar');
+    await Proximate.close(proxy);
   });
 
   it('should work with an object member function', async () => {
@@ -36,6 +38,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo('bar')).toBe('bar');
+    await Proximate.close(proxy);
   });
 });
 
@@ -61,6 +64,7 @@ describe('Marshalling', function() {
     expect(await proxy(false)).toBe(false);
     expect(await proxy(123)).toBe(123);
     expect(await proxy('foobar')).toBe('foobar');
+    await Proximate.close(proxy);
   });
 
   it('should pass arrays', async () => {
@@ -72,6 +76,7 @@ describe('Marshalling', function() {
     expect(await proxy([])).toEqual([]);
     expect(await proxy([1])).toEqual([1]);
     expect(await proxy([1, 2, {}])).toEqual([1, 2, {}]);
+    await Proximate.close(proxy);
   });
 
   it('should pass objects', async () => {
@@ -83,6 +88,7 @@ describe('Marshalling', function() {
     expect(await proxy({})).toEqual({});
     expect(await proxy({ foo: 'bar' })).toEqual({ foo: 'bar' });
     expect(await proxy({ foo: { bar: 'baz' } })).toEqual({ foo: { bar: 'baz' } });
+    await Proximate.close(proxy);
   });
 
   it("should pass Error", async () => {
@@ -100,6 +106,7 @@ describe('Marshalling', function() {
     }
     expect(error instanceof Error).toBe(true);
     expect(await proxy(error)).toEqual(error);
+    await Proximate.close(proxy);
   });
 
   it('should pass transferables', async () => {
@@ -126,6 +133,7 @@ describe('Marshalling', function() {
     expect(iArrayX).not.toBe(iArrayY);
     expect(iArrayX.length).toBe(0);
     expect([...iArrayY]).toEqual([1, 2, 3]);
+    await Proximate.close(proxy);
   });
 
   it('should pass proxies', async () => {
@@ -147,6 +155,7 @@ describe('Marshalling', function() {
     expect(await functionProxy()).toEqual(f());
 
     Proximate.protocols.delete('function');
+    await Proximate.close(proxy);
   });
 });
 
@@ -176,6 +185,7 @@ describe('Object member access', function() {
 
     expect(await proxy.value).toBe(obj.value);
     expect(await proxy.foo.bar).toBe(obj.foo.bar);
+    await Proximate.close(proxy);
   });
 
   it('should set', async () => {
@@ -202,6 +212,7 @@ describe('Object member access', function() {
     proxy.bar = 'baz';
     expect(await proxy.bar).toBe(obj.bar);
     expect(obj.bar).toBe('baz');
+    await Proximate.close(proxy);
   });
 });
 
@@ -228,6 +239,7 @@ describe('revokeProxies()', function() {
 
     Proximate.revokeProxies(f);
     await expectAsync(proxy()).toBeRejected();
+    await Proximate.close(proxy);
   });
 });
 
