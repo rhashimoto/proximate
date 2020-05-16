@@ -1,36 +1,53 @@
-const RELAY_MARKER = Symbol('relay');
-const PROXY_MARKER = Symbol('proxy');
-const SETTABLE_MARKER = Symbol('settable');
-const CLOSE_METHOD = Symbol('close');
+interface Endpoint {
+  addEventListener(type: string, handler: (event: MessageEvent) => void): void;
+  removeEventListener(type: string, handler: (event: MessageEvent) => void): void;
+  postMessage(data: any, transferables?: Transferable[]): void;
+  start?(): void;
+  close?(): void;
+}
 
-// Message object keys. We make the keys as short as possible to
-// minimize message size.
-const NONCE = 'n'; // Unique identifier to match requests and responses.
-const ARGS = 'a';  // Array of serialized function arguments.
-const RESULT = 'r';// Serialized result.
-const ERROR = 'e'; // Serialized exception. Also used for serialization.
-const PROXY = 'p'; // Array of strings at top level. Also used for serialization.
-const DATA = 'd';  // Not a top-level key, only used for serialization.
-const CLOSE = 'c'; // Dereference request marker.
+interface Options {
+  receiver?: any,
+  debug?: string
+}
 
-// Global mapping of proxy id to local object. When a proxy for an
-// object is sent to another endpoint, we give it an id (a nonce) and
-// send that over the wire. When the other endpoint uses the proxy, it
-// sends the id back and we use this map to retrieve the object.
-type ProxyEntry = { target: any, count: number };
-const proxies = new Map<string, ProxyEntry>();
+// Extensible object serialization.
+export interface Protocol<T> {
+  canHandle(data: unknown): data is T;
+  serialize(data: T, registerReceiver: (receiver: any) => string): [any, Transferable[]];
+  deserialize(data: any, createProxy: (id: string) => any): T;
+}
 
-// Object to transferables mapping from Proximate.transfer().
-const transfers = new Map<any, Transferable[]>();
+// Convenience base class for passing objects by proxy.
+export abstract class ProxyProtocol<T> implements Protocol<T> {
+  abstract canHandle(data: any): data is T;
 
-// Request nonce to Promise resolve/reject mapping. When an outgoing
-// request is made, resolve/reject from its Promise are stored here
-// so they can be found when the response arrives.
-const requests = new Map<string, { resolve: (x: any) => void, reject: (x: Error) => void }>();
+  serialize(data: any, registerReceiver: (receiver: any) => string): [any, Transferable[]] {
+    return [registerReceiver(data), []];
+  }
 
-// Generate a string "nonce". Each character has slightly more than 5
-// bits of entropy so 24 characters is about 124 bits. Not absolutely
-// guaranteed unique, but good enough.
+  deserialize(data: any, createProxy: (id: string) => any): T {
+    return createProxy(data);
+  }
+}
+
+const errorProtocol: Protocol<Error> = {
+  canHandle(data: any): data is Error {
+    return data instanceof Error;
+  },
+
+  serialize(data): [any, Transferable[]] {
+    return [{
+      message: data.message,
+      stack: data.stack
+    }, []];
+  },
+
+  deserialize(data: any, createProxy: (id: string) => any): any {
+    return Object.assign(new Error(), data);
+  }
+};
+
 function nonce(length = 24): string {
   let value = '';
   while (value.length < length) {
@@ -39,324 +56,206 @@ function nonce(length = 24): string {
   return value.substring(0, length);
 }
 
-// Creation options.
-// passByProxy is a predicate function or array of predicate functions that
-// provide an automatic way to indicate whether to pass an object by proxy.
-type PassByProxy = (any) => boolean;
-interface Options {
-  target?: any,
-  passByProxy?: PassByProxy | PassByProxy[],
-  debug?: any
-}
+// Two-way mapping between objects and proxy ids. Reference counting
+// is used to remove associations when all remote proxies have been
+// released.
+const mapObjectToId = new WeakMap<any, string>();
+const mapIdToObject = new Map<string, { receiver: any, count: number }>();
 
-interface Endpoint {
-  addEventListener(type: string, handler: (MessageEvent) => void): void;
-  removeEventListener(type: string, handler: (MessageEvent) => void): void;
-  postMessage(data: any, transferables?: Transferable[]): void;
-  start?(): void;
-  close?(): void;
-}
-
-// MessageChannel communications wrapper. Only the static functions on
-// this class are used for the public API. Class instances are only
-// used internally.
-export default class Proximate {
-  static close = CLOSE_METHOD;
-
-  private passByProxy: PassByProxy[];
-  private defaultProxyId: string = nonce();
-  private debug: any;
-
-  private constructor(
-    private endpoint: Endpoint,
-    passAsProxy: PassByProxy | PassByProxy[] = []) {
-    if (endpoint[RELAY_MARKER]) throw new Error('MessagePort in use');
-    endpoint[RELAY_MARKER] = this.handleMessage.bind(this);
-    endpoint.addEventListener('message', endpoint[RELAY_MARKER]);
-    endpoint.start?.();
-    this.endpoint = endpoint;
-    this.passByProxy = [passAsProxy].flat();
+function incReceiverRef(receiver: any) {
+  let id = mapObjectToId.get(receiver);
+  if (!id) {
+    id = nonce();
+    mapObjectToId.set(receiver, id);
+    mapIdToObject.set(id, { receiver, count: 0 });
   }
+  mapIdToObject.get(id).count++;
+  return id;
+}
 
-  private handleMessage(event: MessageEvent): void {
-    if (this.debug) console.debug(this.debug, event.data);
-    
+function decReceiverRef(receiver: any) {
+  const id = mapObjectToId.get(receiver);
+  if (id) {
+    if (--mapIdToObject.get(id).count === 0) {
+      clearReceiverRefs(receiver);
+    }
+  }
+}
+
+function clearReceiverRefs(receiver: any) {
+  const id = mapObjectToId.get(receiver);
+  mapObjectToId.delete(receiver);
+  mapIdToObject.delete(id);
+}
+
+const release = Symbol('release');
+
+export class Proximate {
+  private static endpoints = new WeakMap<Endpoint, Proximate>();
+
+  private debug: string;
+  private defaultId: string;
+  private requests = new Map<string,  { resolve: (x: any) => void, reject: (x: Error) => void }>();
+
+  async handleMessage(event: MessageEvent) {
     const message = event.data;
-    if (this.isRequest(message)) {
-      this.handleRequest(message);
-    } else if (this.isResponse(message)) {
-      this.handleResponse(message);
+    if (this.debug) console.debug(this.debug, message);
+
+    const endpoint = (event.source || event.target) as unknown as Endpoint;
+    if (message.id && message.path) {
+      // Handle response.
+      const response: any = { id: message.id };
+      let transferables = [];
+      try {
+        const proxyId = message.path.shift() || this.defaultId;
+        const [tail] = message.path.slice(-1);
+        if (!mapIdToObject.get(proxyId)) throw new Error(`invalid proxy '${proxyId}`);
+        let { receiver } = mapIdToObject.get(proxyId);
+
+        let parent;
+        for (const property of message.path) {
+          parent = receiver;
+          receiver = await receiver[property];
+        }
+
+        let result;
+        if (message.args) {
+          // Function call.
+          const args = message.args.map(arg => this.deserialize(endpoint, arg));
+          result = await receiver.apply(parent, args);
+        } else if (message.release) {
+          decReceiverRef(receiver);
+        } else {
+          // Member access.
+          if (message.hasOwnProperty('value')) {
+            parent[tail] = this.deserialize(endpoint, message.value);
+          } else {
+            result = receiver;
+          }
+        }
+        [response.result, transferables] = this.serialize(result);
+      } catch(e) {
+        [response.error, transferables] = this.serialize(e);
+      }
+      endpoint.postMessage(response, transferables);
+    } else if (message.id && this.requests.has(message.id)) {
+      // Handle response.
+      const request = this.requests.get(message.id);
+      if (message.hasOwnProperty('result')) {
+        const result = this.deserialize(endpoint, message.result);
+        request.resolve(result);
+      } else {
+        const error = this.deserialize(endpoint, message.error);
+        request.reject(error);
+      }
     } else {
       console.debug('ignored message', message);
     }
   }
 
-  private isRequest(message: object) {
-    return message.hasOwnProperty(NONCE) && message.hasOwnProperty(PROXY);
-  }
-
-  private async handleRequest(message: object): Promise<void> {
-    const response = { [NONCE]: message[NONCE] };
-    let transferList = [];
-    try {
-      // The target is an array of strings where the first element is
-      // the proxy id and the last element (if any) is the method
-      // name. An empty string proxy id maps to the default proxy.
-      const path = message[PROXY].slice();
-      const proxyId = path.shift();
-      let { target } = proxies.get(proxyId || this.defaultProxyId);
-      if (!target) throw new Error(`no proxy '${message[PROXY][0]}' (revoked?)`);
-      const settable = target.hasOwnProperty(SETTABLE_MARKER);
-      const member = path.pop();
-
-      // Dereference any remaining elements of the path to get the
-      // direct receiver.
-      target = path.reduce((obj, property) => obj[property], target);
-
-      let result: any;
-      if (message.hasOwnProperty(ARGS)) {
-        // Function call.
-        const f = member ? target[member] : target;
-        const args = message[ARGS].map(arg => this.deserialize(arg));
-        result = await f.apply(target, args);
-      } else if (message.hasOwnProperty(CLOSE)) {
-        this.derefProxy(proxyId)
-      } else {
-        // Member access.
-        if (message.hasOwnProperty(DATA)) {
-            if (!settable) {
-              console.warn('proxied object not settable');
-              throw new Error('proxied object not settable');
-            }
-            target[member] = this.deserialize(message[DATA]);
-        } else {
-          result = await target[member];
-        }
+  serialize(data: any): [typeof data, Transferable[]] {
+    for (const [key, handler] of Proximate.protocols.entries()) {
+      if (handler.canHandle(data)) {
+        const serialized = handler.serialize(data, incReceiverRef);
+        return [{
+          type: key,
+          data: serialized[0]
+        }, serialized[1]]
       }
-
-      // Collect any associated Transferable objects.
-      transferList = transfers.get(result) || [];
-      transfers.delete(result);
-      response[RESULT] = this.serialize(result);
-    } catch (e) {
-      transferList = transfers.get(e) || [];
-      transfers.delete(e);
-      response[ERROR] = this.serialize(e);
     }
-
-    this.endpoint.postMessage(response, transferList);
-  }
-  
-  private isResponse(message: object) {
-    return message.hasOwnProperty(NONCE) &&
-      (message.hasOwnProperty(RESULT) || message.hasOwnProperty(ERROR));
-  }
-
-  private handleResponse(message: object): void {
-    // Use the nonce to look up the request Promise functions (the
-    // response nonce is the same as the request nonce).
-    const request = requests.get(message[NONCE]);
-    if (request) {
-      // Fulfil the request Promise.
-      requests.delete(message[NONCE]);
-      if (message.hasOwnProperty(RESULT)) {
-        const result = this.deserialize(message[RESULT]);
-        request.resolve(result);
-      } else {
-        const error = this.deserialize(message[ERROR]);
-        request.reject(error);
-      }
-    } else {
-      console.warn(`unmatched response '${message[NONCE]}'`);
-    }
-  }
-  
-  // Serialize a single argument or a return value. Objects are wrapped
-  // because some will be sent by proxy.
-  private serialize(data: any) {
     if (data === Object(data)) {
-      // Automatically pass designated objects by proxy.
-      if (this.passByProxy.some(predicate => predicate(data))) {
-        Proximate.enableProxy(data);
-      }
+      return [{ data }, []];
+    }
+    return [data, []];
+  }
 
-      const proxyId = data[PROXY_MARKER];
-      if (proxyId) {
-        this.refProxy(proxyId, data);
-        return { [PROXY]: proxyId };
-      } else if (data instanceof Error) {
-        return {
-          [ERROR]: {
-            message: data.message,
-            stack: data.stack
-          }
-        };
+  deserialize(endpoint: Endpoint, data: any) {
+    if (data === Object(data)) {
+      if (data.type) {
+        const handler = Proximate.protocols.get(data.type);
+        if (!handler) throw new Error(`unexpected protocol ${data.type}`);
+        return handler.deserialize(data.data, id => this.createLocalProxy(endpoint, [id]));
       }
-      return { [DATA]: data };
+      return data.data;
     }
     return data;
   }
 
-  // Deserialize a single argument or a return value.
-  private deserialize(data: any) {
-    if (data === Object(data)) {
-      if (data[PROXY]) {
-        return this.createProxy([data[PROXY]]);
-      } else if (data[ERROR]) {
-        return Object.assign(new Error(), data[ERROR]);
-      }
-      return data[DATA];
-    }
-    return data;
+  sendRequest(endpoint: Endpoint, request, transferables: Transferable[] = []) {
+    return new Promise((resolve, reject) => {
+      request.id = nonce();
+      this.requests.set(request.id, { resolve, reject });
+      endpoint.postMessage(request, transferables);
+    });
   }
 
-  // Create an ES6 Proxy to handle member get and function and method calls.
-  // The first element of the path is the proxyId, which is the empty string
-  // for the default Proximate proxy. Otherwise it is the nonce attached by
-  // Proximate.enableProxy().
-  private createProxy(path: (string|number|symbol)[], obj: any = function() {}) {
-    // A Proxy can only be passed by proxy so mark it.
-    obj[PROXY_MARKER] = nonce();
-    const { proxy, revoke } = Proxy.revocable(obj, {
-      apply: (target, _, args: any[]) => {
-        const transferables = args.flatMap(arg => {
-          const result = transfers.get(arg) || [];
-          transfers.delete(arg);
-          return result;
-        });
-        const request = {
-          [PROXY]: path,
-          [ARGS]: args.map(arg => this.serialize(arg))
-        };
-        return this.sendRequest(request, transferables);
-      },
-      
-      get: (target, property, _) => {
-        if (typeof property === 'symbol' && property in target) return target[property];
-        if (property === 'then') {
-          if (path.length === 1) return { then: () => proxy };
-          const p = this.sendRequest({ [PROXY]: path });
-          return p.then.bind(p);
-        }
-        if (property === CLOSE_METHOD && path.length === 1) {
+  createLocalProxy(endpoint: Endpoint, path: (string | number)[] = [nonce()]) {
+    const { proxy, revoke } = Proxy.revocable(() => {}, {
+      get: (_target, property) => {
+        if (property === release && path.length === 1) {
           return () => {
             revoke();
-            return this.sendRequest({ [PROXY]: path, [CLOSE]: true });
-          };
+            return this.sendRequest(endpoint, { path, release: true });
+          }
         }
-        if (typeof property === 'symbol') {
-          return undefined;
+        if (typeof property === 'symbol') return undefined;
+        if (property === 'then') {
+          if (path.length === 1) return { then: () => proxy };
+          const p = this.sendRequest(endpoint, { path });
+          return p.then.bind(p);
         }
-        return this.createProxy([...path, property], target);
+        return this.createLocalProxy(endpoint, [...path, property]);
       },
 
-      set: (target, prop, value) => {
-        const transferables = transfers.get(value) || [];
-        transfers.delete(value);
-        const request = {
-          [PROXY]: [...path, prop],
-          [DATA]: this.serialize(value)
-        };
-        this.sendRequest(request, transferables);
+      set: (_target, property, value) => {
+        if (typeof property === 'symbol') return false;
+        const [wireValue, transferables] = this.serialize(value);
+        this.sendRequest(endpoint, {
+          path: [...path, property],
+          value: wireValue
+        }, transferables);
         return true;
+      },
+
+      apply: (_target, _, args: any[]) => {
+        const serialized = args.map(arg => this.serialize(arg));
+        return this.sendRequest(endpoint, {
+          path,
+          args: serialized.map(value => value[0])
+        }, serialized.map(value => value[1]).flat());
       }
     });
     return proxy;
   }
 
-  private sendRequest(request: object, transferables: Transferable[] = []) {
-    // Make the function/method call request. The Promise will be
-    // settled when the response message arrives.
-    return new Promise((resolve, reject) => {
-      request[NONCE] = nonce();
-      requests.set(request[NONCE], { resolve, reject });
-      this.endpoint.postMessage(request, transferables);
-    });
-  };
-  
-  private refProxy(id: string, target: any) {
-    const proxyEntry = proxies.get(id) || { target, count: 0 };
-    proxyEntry.count++;
-    proxies.set(id, proxyEntry);
-  }
+  static protocols = new Map<string, Protocol<unknown>>([['_error', errorProtocol]]);
 
-  private derefProxy(id: string) {
-    const proxyEntry = proxies.get(id);
-    if (proxyEntry) {
-      if (--proxyEntry.count) {
-        proxies.set(id, proxyEntry);
-      } else {
-        proxies.delete(id);
-      }
+  static wrap(endpoint: Endpoint, options: Options = {}) {
+    if (Proximate.endpoints.has(endpoint)) throw new Error('endpoint already wrapped');
+    const instance = new Proximate();
+    Proximate.endpoints.set(endpoint, instance);
+    endpoint.addEventListener('message', event => instance.handleMessage(event));
+    endpoint.start?.();
+
+    instance.debug = options.debug;
+    if (options.receiver) {
+      instance.defaultId = incReceiverRef(options.receiver);
     }
-  }
-  
-  // Wrap a MessagePort with a Proxy and optionally provide an object
-  // that can be called by proxy by the other endpoint.
-  public static create(
-    endpoint: Endpoint,
-    options: Options = {}) {
-    const relay = new Proximate(endpoint, options.passByProxy);
-    relay.debug = options.debug;
-
-    if  (options.target) {
-      relay.refProxy(relay.defaultProxyId, options.target);
-    }
-
-    // The ES6 Proxy we return must be created with a function target
-    // in case the other endpoint provides a function to its
-    // Proximate.create() invocation that we want to call.
-    const target = function() {};
-    target[CLOSE_METHOD] = () => {
-      endpoint.removeEventListener('message', endpoint[RELAY_MARKER]);
-      delete endpoint[RELAY_MARKER];
-      endpoint.close?.();
-
-      if (options.target) {
-        relay.derefProxy(relay.defaultProxyId);
-      }
-    };
-    
-    return relay.createProxy([''], target);
+    return instance.createLocalProxy(endpoint, ['']);
   }
 
-  // Mark an object to be passed by proxy when sent as an argument or
-  // return value.
-  public static enableProxy(obj: any) {
-    obj[PROXY_MARKER] = obj[PROXY_MARKER] || nonce();
-    return obj;
+  static release(proxy: any) {
+    return proxy[release]?.();
   }
 
-  // Disassociate an object from its proxies. Making a call on any
-  // previously sent proxy will reject the returned Promise.
-  public static revokeProxies(obj: any) {
-    proxies.delete(obj[PROXY_MARKER]);
-
-    // If the object is sent by proxy in the future, don't allow
-    // old proxies to work again.
-    obj[PROXY_MARKER] = nonce();
-    return obj;
-  }
-
-  // Explicitly allow setting properties on an object via proxy. By
-  // default proxies are not settable.
-  public static settable(obj: any) {
-    obj[SETTABLE_MARKER] = true;
-    return obj;
-  }
-
-  // Associate any Transferable objects (e.g. ArrayBuffer,
-  // MessagePort, ImageBitmap, OffscreenCanvase) in an object to be
-  // sent as an argument or return value.
-  public static transfer(obj: any, transferables: Transferable[]) {
-    transfers.set(obj, transferables);
-    return obj;
+  static revokeProxies(receiver: any) {
+    clearReceiverRefs(receiver);
   }
 
   // Wrap a Window with the MessagePort interface. To listen to
-  // an iframe element, use Proximate.portify(element.contentWindow).
-  // Inside the iframe, use Proximate.portify(window.parent).
-  public static portify(window: any, eventSource: any = self, targetOrigin = '*') {
+  // an iframe element, use portify(element.contentWindow).
+  // Inside the iframe, use portify(window.parent).
+  static portify(window: any, eventSource: any = self, targetOrigin = '*') {
     return {
       postMessage(message: object, transferables: Transferable[]) {
         window.postMessage(message, targetOrigin, transferables);
