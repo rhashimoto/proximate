@@ -123,15 +123,11 @@ export class Proximate {
           result = await receiver.apply(parent, args);
         } else if (message.release) {
           // Remote proxy is released.
-          this.decReceiverRef(receiver);
+          this.decReceiverRef(new Map([[proxyId, 1]]));
         } else if (message.close) {
           // Close endpoint.
           const remoteProxies = message.close as Map<string, number>;
-          remoteProxies.forEach((count, id) => {
-            for (let i = 0; i < count; ++i) {
-              this.decReceiverRef(Proximate.mapIdToObject.get(id || this.defaultId)?.receiver);
-            }
-          });
+          this.decReceiverRef(remoteProxies);
           result = this.proxyCounts();
         } else {
           // Member access.
@@ -230,14 +226,8 @@ export class Proximate {
           this.proxies.clear();
 
           // We get back the unreleased proxy counts from the other
-          // endpoint...
-          remoteProxies.forEach((count, id) => {
-            // ...which we use to update receiver reference counts.
-            for (let i = 0; i < count; ++i) {
-              const localId = id || this.defaultId;
-              this.decReceiverRef(Proximate.mapIdToObject.get(localId)?.receiver);
-            }
-          });
+          // endpoint.
+          this.decReceiverRef(remoteProxies);
 
           // Close our endpoint.
           this.close?.();
@@ -319,14 +309,21 @@ export class Proximate {
     return id;
   }
 
-  private decReceiverRef(receiver: any) {
-    const id = Proximate.mapObjectToId.get(receiver);
-    if (id) {
-      if (--Proximate.mapIdToObject.get(id).count === 0) {
-        Proximate.mapObjectToId.delete(receiver);
-        Proximate.mapIdToObject.delete(id);
+  // As part of the connection closing process, each endpoint sends the
+  // other all its unreleased proxy references to be released en masse.
+  private decReceiverRef(remoteProxies: Map<string, number>) {
+    remoteProxies.forEach((count, id) => {
+      const localId = id || this.defaultId;
+      const entry = Proximate.mapIdToObject.get(localId);
+      if (entry) {
+        if ((entry.count -= count) > 0) {
+          Proximate.mapIdToObject.set(localId, entry);
+        } else {
+          Proximate.mapObjectToId.delete(entry.receiver);
+          Proximate.mapIdToObject.delete(localId);
+        }
       }
-    }
+    });
   }
 
   // Add entries to this map to customize serialization, generally
