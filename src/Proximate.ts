@@ -201,54 +201,53 @@ export class Proximate {
   }
 
   private createLocalProxy(endpoint: Endpoint, path: (string | number)[] = [nonce()]) {
+    // Set up local (non-proxied) symbol methods.
+    let proxy;
     const id = path[0] as string;
-    const proxy = new Proxy(() => {}, {
-      get: (_target, property) => {
-        if (path.length === 1) {
-          if (property === RELEASE) {
-            return () => {
-              // Remove the entry for this proxy.
-              const proxiesForId = this.proxies.get(id);
-              proxiesForId.delete(proxy);
-              if (proxiesForId.size === 0) {
-                this.proxies.delete(id);
-              }
-
-              // Tell the remote endpoint to update the receiver ref count.
-              return this.sendRequest(endpoint, { path, release: true });
-            }
-          }
-          if (id === '') {
-            // Only available on the primary Proxy returned from wrap().
-            if (property === CLOSE) {
-              return async () => {
-                // Send a close request with the unreleased proxy counts.
-                const remoteProxies = await this.sendRequest(endpoint, {
-                  path,
-                  close: this.proxyCounts()
-                }) as Map<string, number>;
-                this.proxies.clear();
-
-                // We get back the unreleased proxy counts from the other
-                // endpoint...
-                remoteProxies.forEach((count, id) => {
-                  // ...which we use to update receiver reference counts.
-                  for (let i = 0; i < count; ++i) {
-                    const localId = id || this.defaultId;
-                    this.decReceiverRef(Proximate.mapIdToObject.get(localId)?.receiver);
-                  }
-                });
-
-                // Close our endpoint.
-                this.close?.();
-              }
-            }
-            if (property === DEBUG) {
-              return () => this;
-            }
-          }
+    const target = () => {};
+    if (path.length === 1) {
+      target[RELEASE] = () => {
+        // Remove the entry for this proxy.
+        const proxiesForId = this.proxies.get(id);
+        proxiesForId.delete(proxy);
+        if (proxiesForId.size === 0) {
+          this.proxies.delete(id);
         }
-        if (typeof property === 'symbol') return undefined;
+
+        // Tell the remote endpoint to update the receiver ref count.
+        return this.sendRequest(endpoint, { path, release: true });
+      };
+      if (id === '') {
+        // These methods are only installed on the primary proxy returned
+        // by wrap().
+        target[DEBUG] = () => this;
+        target[CLOSE] = async () => {
+          // Send a close request with the unreleased proxy counts.
+          const remoteProxies = await this.sendRequest(endpoint, {
+            path,
+            close: this.proxyCounts()
+          }) as Map<string, number>;
+          this.proxies.clear();
+
+          // We get back the unreleased proxy counts from the other
+          // endpoint...
+          remoteProxies.forEach((count, id) => {
+            // ...which we use to update receiver reference counts.
+            for (let i = 0; i < count; ++i) {
+              const localId = id || this.defaultId;
+              this.decReceiverRef(Proximate.mapIdToObject.get(localId)?.receiver);
+            }
+          });
+
+          // Close our endpoint.
+          this.close?.();
+        };
+      }
+    }
+
+    proxy = new Proxy(target, {
+      get: (target, property) => {
+        if (typeof property === 'symbol') return target[property];
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
           const promise = this.sendRequest(endpoint, { path });
@@ -257,8 +256,11 @@ export class Proximate {
         return this.createLocalProxy(endpoint, [...path, property]);
       },
 
-      set: (_target, property, value) => {
-        if (typeof property === 'symbol') return false;
+      set: (target, property, value) => {
+        if (typeof property === 'symbol') {
+          target[property] = value;
+          return true;
+        }
         const [wireValue, transferables] = this.serialize(value);
         this.sendRequest(endpoint, {
           path: [...path, property],

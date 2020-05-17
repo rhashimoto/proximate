@@ -1,4 +1,4 @@
-import { Proximate, ProxyProtocol } from '../dist/es/Proximate.min.js';
+import { Proximate, ProxyProtocol } from '../dist/es/Proximate.js';
 
 describe('Proximate.wrap()', function() {
   let port1, port2;
