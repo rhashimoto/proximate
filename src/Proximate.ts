@@ -7,16 +7,6 @@ interface Endpoint {
   close?(): void;
 }
 
-interface Options {
-  receiver?: any,
-  debug?: (message: MessageEvent) => void
-}
-
-type PromiseCallbacks = {
-  resolve: (result: any) => void;
-  reject: (error: Error) => void;
-};
-
 // Extensible object serialization. Custom instances of Protocol can be
 // registered in Proximate.protocols with a string key. The typical use
 // is either to pass by proxy or to specify transferables.
@@ -78,7 +68,7 @@ export class Proximate {
 
   // Each request has a nonce id. When a response from the remote endpoint
   // arrives, this map uses the id to get the request's Promise callbacks.
-  requests = new Map<string,  PromiseCallbacks>();
+  requests = new Map<string, { resolve, reject }>();
 
   // This map holds a one-to-many mapping from ids to Proxy instances.
   // When the connection is closed, reference counts derived from this
@@ -309,10 +299,13 @@ export class Proximate {
   static protocols = new Map<string, Protocol<unknown>>([['_error', errorProtocol]]);
 
   // Wrap a MessagePort-like endpoint with a proxy.
-  // Valid options:
-  //  receiver  The object that the remote endpoint proxy accesses.
-  //  debug     A function passed incoming MessageEvent instances.
-  static wrap(endpoint: Endpoint, options: Options = {}) {
+  static wrap(
+    endpoint: Endpoint,
+    options: {
+      receiver?: any,            // Receiver for primary proxy at remote endpoint.
+      shareEndpoint?: boolean,   // If true, don't close endpoint.
+      debug?: (message) => void  // Callback for incoming messages.
+    } = {}) {
     const instance = new Proximate();
     instance.debug = options.debug;
     if (options.receiver) {
@@ -327,7 +320,7 @@ export class Proximate {
     endpoint.start?.();
     instance.close = () => {
       endpoint.removeEventListener('message', listener);
-      endpoint.close?.();
+      if (!options.shareEndpoint) endpoint.close?.();
     }
 
     // Create the primary proxy.
