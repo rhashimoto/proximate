@@ -75,7 +75,10 @@ export class Proximate {
   // data is sent to the remote endpoint to reclaim resources. It may
   // also be accessed via the proxies() static member function for
   // debugging leaks.
-  proxies = new Map<string, Set<any>>();
+  mapIdToProxies = new Map<string, Set<any>>();
+
+  // This map tracks proxies created from a specific point in time.
+  trackedProxies = new Set<any>();
 
   // Clean up and close endpoint (assigned in wrap).
   private close: () => void;
@@ -108,11 +111,10 @@ export class Proximate {
           result = await receiver.apply(parent, args);
         } else if (message.release) {
           // Remote proxy is released.
-          this.decReceiverRef(new Map([[proxyId, 1]]));
+          this.decReceiverRef(message.release);
         } else if (message.close) {
           // Close endpoint.
-          const remoteProxies = message.close as Map<string, number>;
-          this.decReceiverRef(remoteProxies);
+          this.decReceiverRef(message.close);
           result = this.proxyCounts();
         } else {
           // Member access.
@@ -189,21 +191,22 @@ export class Proximate {
     if (path.length === 1) {
       target[Proximate.RELEASE] = () => {
         // Remove the entry for this proxy.
-        const proxiesForId = this.proxies.get(id);
+        this.trackedProxies.delete(proxy);
+        const proxiesForId = this.mapIdToProxies.get(id);
         proxiesForId.delete(proxy);
         if (proxiesForId.size === 0) {
-          this.proxies.delete(id);
+          this.mapIdToProxies.delete(id);
         }
 
         // Tell the remote endpoint to update the receiver ref count.
-        return this.sendRequest(endpoint, { path, release: true });
+        return this.sendRequest(endpoint, { path, release: new Map([[id, 1]]) });
       };
     }
 
     proxy = new Proxy(target, {
       get: (target, property) => {
         if (typeof property === 'symbol') return target[property];
-        if (!this.proxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
+        if (!this.mapIdToProxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
           const promise = this.sendRequest(endpoint, { path });
@@ -217,7 +220,7 @@ export class Proximate {
           target[property] = value;
           return true;
         }
-        if (!this.proxies.get(id)?.has(proxy)) throw Error('invalid proxy');
+        if (!this.mapIdToProxies.get(id)?.has(proxy)) throw Error('invalid proxy');
         const [wireValue, transferables] = this.serialize(value);
         this.sendRequest(endpoint, {
           path: [...path, property],
@@ -227,7 +230,7 @@ export class Proximate {
       },
 
       apply: (_target, _, args: any[]) => {
-        if (!this.proxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
+        if (!this.mapIdToProxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         const serialized = args.map(arg => this.serialize(arg));
         return this.sendRequest(endpoint, {
           path,
@@ -239,12 +242,16 @@ export class Proximate {
     // Track the created proxies by recording them in a Map. There
     // may be multiple proxies for the same remote object, in which
     // case all the proxies use the same id.
-    if (!this.proxies.has(id)) {
-      this.proxies.set(id, new Set());
+    if (!this.mapIdToProxies.has(id)) {
+      this.mapIdToProxies.set(id, new Set());
     }
-    const proxiesForId = this.proxies.get(id);
+    const proxiesForId = this.mapIdToProxies.get(id);
     proxiesForId.add(proxy);
-    this.proxies.set(id, proxiesForId);
+    this.mapIdToProxies.set(id, proxiesForId);
+
+    // Add created proxies in another container to track from a
+    // specific point in time. The primary proxy is not included.
+    id && this.trackedProxies.add(proxy);
     return proxy;
   }
 
@@ -253,7 +260,7 @@ export class Proximate {
   // resources on close.
   private proxyCounts() {
     const result = new Map<string, number>();
-    for (const [key, value] of this.proxies.entries()) {
+    for (const [key, value] of this.mapIdToProxies.entries()) {
       result.set(key, value.size);
     }
     return result;
@@ -333,7 +340,8 @@ export class Proximate {
         path: [''],
         close: instance.proxyCounts()
       }) as Map<string, number>;
-      instance.proxies.clear();
+      instance.mapIdToProxies.clear();
+      instance.trackedProxies.clear();
 
       // We get back the unreleased proxy counts from the other
       // endpoint.
@@ -341,6 +349,15 @@ export class Proximate {
 
       // Close our endpoint.
       instance.close();
+    };
+    proxy[Proximate.TRACK] = () => {
+      instance.trackedProxies.clear();
+    };
+    proxy[Proximate.RELEASE_TRACKED] = () => {
+      for (const trackedProxy of instance.trackedProxies.values()) {
+        trackedProxy[Proximate.RELEASE]();
+      };
+      instance.trackedProxies.clear();
     };
     return proxy;
   }
@@ -350,12 +367,17 @@ export class Proximate {
   // Release resources for a proxy.
   static RELEASE = Symbol('release');
 
-  // These symbols are only defined the primary proxy returned from wrap().
+  // These symbols are only defined on the primary proxy returned from wrap().
 
   // Release all proxies sharing the endpoint.
   static CLOSE = Symbol('close');
 
-  // Return state for debugging. This is useful for tracking down leaks.
+  // Track and relase proxies. RELEASE_TRACKED releases all local proxies
+  // created since the last call to TRACK.
+  static TRACK = Symbol('track_proxies');
+  static RELEASE_TRACKED = Symbol('clear_proxies');
+
+  // Return state for debugging.
   static DEBUG = Symbol('debug');
 
   // Wrap a Window with the MessagePort interface. To listen to

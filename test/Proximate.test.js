@@ -236,11 +236,80 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2, { debug: null });
 
     await expectAsync(proxy()).toBeResolvedTo(f());
-    expect(proxy[Proximate.DEBUG]().proxies.size).toBeGreaterThan(0)
+    expect(proxy[Proximate.DEBUG]().mapIdToProxies.size).toBeGreaterThan(0)
 
     proxy[Proximate.RELEASE]();
     await expectAsync(proxy()).toBeRejected();
-    expect(proxy[Proximate.DEBUG]().proxies.size).toBe(0)
+    expect(proxy[Proximate.DEBUG]().mapIdToProxies.size).toBe(0)
+    await proxy[Proximate.CLOSE]();
+  });
+});
+
+describe('tracking', function() {
+  let port1, port2;
+  beforeEach(() => {
+    ({ port1, port2 } = new MessageChannel());
+  });
+
+  afterEach(() => {
+    port1.close();
+    port2.close();
+  });
+
+  it('RELEASE_TRACKED should not release the primary', async () => {
+    function f() {
+      return 'foo';
+    }
+    const objectUnderTest = Proximate.wrap(port1, {
+      receiver: () => f,
+      debug: null
+    });
+    const proxy = Proximate.wrap(port2, { debug: null });
+
+    class FunctionProtocol extends ProxyProtocol {
+      canHandle(data) {
+        return typeof data === 'function';
+      }
+    }
+    Proximate.protocols.set('function', new FunctionProtocol());
+
+    proxy[Proximate.RELEASE_TRACKED]();
+    await expectAsync(proxy()).toBeResolved();
+
+    Proximate.protocols.delete('function');
+    await proxy[Proximate.CLOSE]();
+  });
+
+  it('RELEASE_TRACKED should release after TRACK', async () => {
+    function f() {
+      return 'foo';
+    }
+    const objectUnderTest = Proximate.wrap(port1, {
+      receiver: () => f,
+      debug: null
+    });
+    const proxy = Proximate.wrap(port2, { debug: null });
+
+    class FunctionProtocol extends ProxyProtocol {
+      canHandle(data) {
+        return typeof data === 'function';
+      }
+    }
+    Proximate.protocols.set('function', new FunctionProtocol());
+
+    const proxyFuncA = await proxy();
+    proxy[Proximate.TRACK]();
+    const proxyFuncB = await proxy();
+
+    await expectAsync(proxyFuncA()).toBeResolvedTo(f());
+    await expectAsync(proxyFuncB()).toBeResolvedTo(f());
+
+    proxy[Proximate.RELEASE_TRACKED]();
+
+    await expectAsync(proxyFuncA()).toBeResolvedTo(f());
+    await expectAsync(proxyFuncB()).toBeRejected();
+
+    Proximate.protocols.delete('function');
     await proxy[Proximate.CLOSE]();
   });
 });
