@@ -1,4 +1,4 @@
-import { Proximate, ProxyProtocol } from '../dist/es/Proximate.js';
+import { Proximate, ProxyProtocol } from '../dist/es/Proximate.min.js';
 
 describe('Proximate.wrap()', function() {
   let port1, port2;
@@ -235,7 +235,7 @@ describe('release', function() {
     });
     const proxy = Proximate.wrap(port2, { debug: null });
 
-    expect(await proxy()).toBe(f());
+    await expectAsync(proxy()).toBeResolvedTo(f());
     expect(Proximate.proxies(proxy).size).toBeGreaterThan(0)
 
     Proximate.release(proxy);

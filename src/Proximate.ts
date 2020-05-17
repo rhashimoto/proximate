@@ -126,10 +126,12 @@ export class Proximate {
   private async handleMessage(endpoint: Endpoint, message: any) {
     this.debug?.(message);
     if (message.id && message.path) {
-      // Handle request (build response).
+      // Handle incoming request (build response).
       const response: any = { id: message.id };
       let transferables = [];
       try {
+        // The head of the path is the receiver id. The empty string is
+        // a special key for the primary proxy.
         const proxyId = message.path.shift() || this.defaultId;
         const [tail] = message.path.slice(-1);
         let { receiver } = mapIdToObject.get(proxyId) || { receiver: undefined };
@@ -140,6 +142,8 @@ export class Proximate {
           receiver = receiver[property];
         }
 
+        // The message doesn't have an explicit type property. We deduce
+        // the type of message from which properties it has.
         let result;
         if (message.args) {
           // Function call.
@@ -160,8 +164,10 @@ export class Proximate {
         } else {
           // Member access.
           if (message.hasOwnProperty('value')) {
+            // Set member.
             parent[tail] = this.deserialize(endpoint, message.value);
           } else {
+            // Get member.
             result = receiver;
           }
         }
@@ -172,7 +178,7 @@ export class Proximate {
       endpoint.postMessage(response, transferables);
       if (message.close) this.close?.();
     } else if (message.id && this.requests.has(message.id)) {
-      // Handle response.
+      // Match the response with its request.
       const request = this.requests.get(message.id);
       this.requests.delete(message.id);
       if (message.hasOwnProperty('result')) {
@@ -191,11 +197,8 @@ export class Proximate {
     // Check for custom serialization.
     for (const [key, handler] of Proximate.protocols.entries()) {
       if (handler.canHandle(data)) {
-        const serialized = handler.serialize(data, incReceiverRef);
-        return [{
-          type: key,
-          data: serialized[0]
-        }, serialized[1]]
+        const [wireValue, transferables] = handler.serialize(data, incReceiverRef);
+        return [{ type: key, data: wireValue }, transferables]
       }
     }
     if (data === Object(data)) {
@@ -207,7 +210,7 @@ export class Proximate {
   private deserialize(endpoint: Endpoint, data: any) {
     if (data === Object(data)) {
       if (data.type) {
-        // Custom serialization.
+        // This object had custom serialization.
         const handler = Proximate.protocols.get(data.type);
         if (!handler) throw new Error(`unexpected protocol ${data.type}`);
         return handler.deserialize(data.data, id => this.createLocalProxy(endpoint, [id]));
@@ -232,28 +235,38 @@ export class Proximate {
         if (path.length === 1) {
           if (property === RELEASE) {
             return () => {
+              // Remove the entry for this proxy.
               const proxiesForId = this.proxies.get(id);
               proxiesForId.delete(proxy);
               if (proxiesForId.size === 0) {
                 this.proxies.delete(id);
               }
+
+              // Tell the remote endpoint to update the receiver ref count.
               return this.sendRequest(endpoint, { path, release: true });
             }
           }
           if (id === '') {
-            // Only available on Proxy returned from wrap().
+            // Only available on the primary Proxy returned from wrap().
             if (property === CLOSE) {
               return async () => {
+                // Send a close request with the unreleased proxy counts.
                 const remoteProxies = await this.sendRequest(endpoint, {
                   path,
                   close: this.proxyCounts()
                 }) as Map<string, number>;
+                this.proxies.clear();
+
+                // We get back the unreleased proxy counts from the other
+                // endpoint...
                 remoteProxies.forEach((count, id) => {
+                  // ...which we use to update receiver reference counts.
                   for (let i = 0; i < count; ++i) {
                     decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
                   }
                 });
-                this.proxies.clear();
+
+                // Close our endpoint.
                 this.close?.();
               }
             }
@@ -265,8 +278,8 @@ export class Proximate {
         if (typeof property === 'symbol') return undefined;
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
-          const p = this.sendRequest(endpoint, { path });
-          return p.then.bind(p);
+          const promise = this.sendRequest(endpoint, { path });
+          return promise.then.bind(promise);
         }
         return this.createLocalProxy(endpoint, [...path, property]);
       },
@@ -290,6 +303,9 @@ export class Proximate {
       }
     });
     
+    // Track the created proxies by recording them in a Map. There
+    // may be multiple proxies for the same remote object, in which
+    // case all the proxies use the same id.
     if (!this.proxies.has(id)) {
       this.proxies.set(id, new Set());
     }
@@ -299,8 +315,8 @@ export class Proximate {
     return proxy;
   }
 
-  // Convert the one-to-many mapping of ids to proxies into a
-  // map of reference counts for the remote endpoint to reclaim
+  // Helper function to convert the one-to-many mapping of ids to proxies
+  // into a map of reference counts for the remote endpoint to reclaim
   // resources on close.
   private proxyCounts() {
     const result = new Map<string, number>();
@@ -320,6 +336,14 @@ export class Proximate {
   //  debug     A function passed incoming MessageEvent instances.
   static wrap(endpoint: Endpoint, options: Options = {}) {
     const instance = new Proximate();
+    instance.debug = options.debug;
+    if (options.receiver) {
+      // Operations on the remote endpoint's primary proxy will
+      // be passed to this receiver object.
+      instance.defaultId = incReceiverRef(options.receiver);
+    }
+
+    // Hook up the message passing.
     const listener = (event: MessageEvent) => instance.handleMessage(endpoint, event.data);
     endpoint.addEventListener('message', listener);
     endpoint.start?.();
@@ -329,27 +353,27 @@ export class Proximate {
       instance.close = undefined;
     }
 
-    instance.debug = options.debug;
-    if (options.receiver) {
-      instance.defaultId = incReceiverRef(options.receiver);
-    }
+    // Create the primary proxy.
     return instance.createLocalProxy(endpoint, ['']);
   }
 
-  // Release remote resources. No further calls to proxy methods should
-  // be made.
+  // Release remote resources for this proxy. No further method calls
+  // on this proxy should be invoked, results are undefined.
   static release(proxy: any) {
     return proxy[RELEASE]();
   }
 
-  // Close the endpoint the proxy argument is on. All proxies on the
-  // same endpoint will be released.
-  static close(proxy: any) {
-    return proxy[CLOSE]?.();
+  // Close the endpoint the proxy argument was created with. All proxies
+  // on the same endpoint will be released. Must be called with the proxy
+  // returned directly by wrap(), i.e. not a proxy received via an
+  // argument or function call result.
+  static close(primary: any) {
+    return primary[CLOSE]?.();
   }
 
   // Get the one-to-many mapping of ids to Proxy instances for debugging
-  // leaks. Must be called with proxy returned directly by wrap().
+  // leaks. Must be called with proxy returned directly by wrap(), i.e.
+  // not a proxy received via an argument or function call result.
   static proxies(primary) {
     return primary[PROXIES]();
   }
