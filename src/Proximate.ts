@@ -67,34 +67,6 @@ function nonce(length = 24): string {
   return value.substring(0, length);
 }
 
-// Two-way mapping between objects and proxy ids. This is for looking
-// up local objects that are passed by proxy to remote endpoints.
-// Reference counting is used to remove associations when all remote
-// proxies have been released.
-const mapObjectToId = new WeakMap<any, string>();
-const mapIdToObject = new Map<string, { receiver: any, count: number }>();
-
-function incReceiverRef(receiver: any) {
-  let id = mapObjectToId.get(receiver);
-  if (!id) {
-    id = nonce();
-    mapObjectToId.set(receiver, id);
-    mapIdToObject.set(id, { receiver, count: 0 });
-  }
-  mapIdToObject.get(id).count++;
-  return id;
-}
-
-function decReceiverRef(receiver: any) {
-  const id = mapObjectToId.get(receiver);
-  if (id) {
-    if (--mapIdToObject.get(id).count === 0) {
-      mapObjectToId.delete(receiver);
-      mapIdToObject.delete(id);
-    }
-  }
-}
-
 // These symbols are used to key special functions on Proxy instances.
 const RELEASE = Symbol('release');
 const CLOSE = Symbol('close');
@@ -134,7 +106,7 @@ export class Proximate {
         // a special key for the primary proxy.
         const proxyId = message.path.shift() || this.defaultId;
         const [tail] = message.path.slice(-1);
-        let { receiver } = mapIdToObject.get(proxyId) || { receiver: undefined };
+        let { receiver } = Proximate.mapIdToObject.get(proxyId) || { receiver: undefined };
 
         let parent;
         for (const property of message.path) {
@@ -151,13 +123,13 @@ export class Proximate {
           result = await receiver.apply(parent, args);
         } else if (message.release) {
           // Remote proxy is released.
-          decReceiverRef(receiver);
+          this.decReceiverRef(receiver);
         } else if (message.close) {
           // Close endpoint.
           const remoteProxies = message.close as Map<string, number>;
           remoteProxies.forEach((count, id) => {
             for (let i = 0; i < count; ++i) {
-              decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
+              this.decReceiverRef(Proximate.mapIdToObject.get(id || this.defaultId)?.receiver);
             }
           });
           result = this.proxyCounts();
@@ -197,7 +169,7 @@ export class Proximate {
     // Check for custom serialization.
     for (const [key, handler] of Proximate.protocols.entries()) {
       if (handler.canHandle(data)) {
-        const [wireValue, transferables] = handler.serialize(data, incReceiverRef);
+        const [wireValue, transferables] = handler.serialize(data, this.incReceiverRef);
         return [{ type: key, data: wireValue }, transferables]
       }
     }
@@ -262,7 +234,8 @@ export class Proximate {
                 remoteProxies.forEach((count, id) => {
                   // ...which we use to update receiver reference counts.
                   for (let i = 0; i < count; ++i) {
-                    decReceiverRef(mapIdToObject.get(id || this.defaultId)?.receiver);
+                    const localId = id || this.defaultId;
+                    this.decReceiverRef(Proximate.mapIdToObject.get(localId)?.receiver);
                   }
                 });
 
@@ -326,6 +299,34 @@ export class Proximate {
     return result;
   }
 
+  // Two-way mapping between objects and proxy ids. This is for looking
+  // up local objects that are passed by proxy to remote endpoints.
+  // Reference counting is used to remove associations when all remote
+  // proxies have been released.
+  static mapObjectToId = new WeakMap<any, string>();
+  static mapIdToObject = new Map<string, { receiver: any, count: number }>();
+
+  private incReceiverRef(receiver: any) {
+    let id = Proximate.mapObjectToId.get(receiver);
+    if (!id) {
+      id = nonce();
+      Proximate.mapObjectToId.set(receiver, id);
+      Proximate.mapIdToObject.set(id, { receiver, count: 0 });
+    }
+    Proximate.mapIdToObject.get(id).count++;
+    return id;
+  }
+
+  private decReceiverRef(receiver: any) {
+    const id = Proximate.mapObjectToId.get(receiver);
+    if (id) {
+      if (--Proximate.mapIdToObject.get(id).count === 0) {
+        Proximate.mapObjectToId.delete(receiver);
+        Proximate.mapIdToObject.delete(id);
+      }
+    }
+  }
+
   // Add entries to this map to customize serialization, generally
   // either to pass by proxy or to specify transferables.
   static protocols = new Map<string, Protocol<unknown>>([['_error', errorProtocol]]);
@@ -340,7 +341,7 @@ export class Proximate {
     if (options.receiver) {
       // Operations on the remote endpoint's primary proxy will
       // be passed to this receiver object.
-      instance.defaultId = incReceiverRef(options.receiver);
+      instance.defaultId = instance.incReceiverRef(options.receiver);
     }
 
     // Hook up the message passing.
