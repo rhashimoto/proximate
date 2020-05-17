@@ -236,11 +236,11 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2, { debug: null });
 
     await expectAsync(proxy()).toBeResolvedTo(f());
-    expect(Proximate.proxies(proxy).size).toBeGreaterThan(0)
+    expect(Proximate.debug(proxy).proxies.size).toBeGreaterThan(0)
 
     Proximate.release(proxy);
     await expectAsync(proxy()).toBeRejected();
-    expect(Proximate.proxies(proxy).size).toBe(0)
+    expect(Proximate.debug(proxy).proxies.size).toBe(0)
     await Proximate.close(proxy);
   });
 });

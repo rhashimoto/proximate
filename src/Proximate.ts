@@ -98,7 +98,7 @@ function decReceiverRef(receiver: any) {
 // These symbols are used to key special functions on Proxy instances.
 const RELEASE = Symbol('release');
 const CLOSE = Symbol('close');
-const PROXIES = Symbol('proxies');
+const DEBUG = Symbol('debug');
 
 export class Proximate {
   private debug: (message) => void;
@@ -107,11 +107,11 @@ export class Proximate {
   // i.e. its id is not passed over the wire. Instead the remote endpoint
   // accesses it by convention with the empty string which is converted
   // locally to this valid id.
-  private defaultId: string;
+  defaultId: string;
 
   // Each request has a nonce id. When a response from the remote endpoint
   // arrives, this map uses the id to get the request's Promise callbacks.
-  private requests = new Map<string,  PromiseCallbacks>();
+  requests = new Map<string,  PromiseCallbacks>();
 
   // This map holds a one-to-many mapping from ids to Proxy instances.
   // When the connection is closed, reference counts derived from this
@@ -270,8 +270,8 @@ export class Proximate {
                 this.close?.();
               }
             }
-            if (property === PROXIES) {
-              return () => this.proxies;
+            if (property === DEBUG) {
+              return () => this;
             }
           }
         }
@@ -371,11 +371,11 @@ export class Proximate {
     return primary[CLOSE]?.();
   }
 
-  // Get the one-to-many mapping of ids to Proxy instances for debugging
-  // leaks. Must be called with proxy returned directly by wrap(), i.e.
-  // not a proxy received via an argument or function call result.
-  static proxies(primary) {
-    return primary[PROXIES]();
+  // Get access to Proximate instance internals for debugging. Must be
+  // called with proxy returned directly by wrap(), i.e. not a proxy
+  // received via an argument or function call result.
+  static debug(primary) {
+    return primary[DEBUG]();
   }
 
   // Wrap a Window with the MessagePort interface. To listen to
