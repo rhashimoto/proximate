@@ -18,7 +18,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy(42)).toBe(42);
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should work with an object member variable', async () => {
@@ -28,7 +28,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo).toBe('bar');
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should work with an object member function', async () => {
@@ -38,7 +38,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo('bar')).toBe('bar');
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 });
 
@@ -64,7 +64,7 @@ describe('Marshalling', function() {
     expect(await proxy(false)).toBe(false);
     expect(await proxy(123)).toBe(123);
     expect(await proxy('foobar')).toBe('foobar');
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should pass arrays', async () => {
@@ -76,7 +76,7 @@ describe('Marshalling', function() {
     expect(await proxy([])).toEqual([]);
     expect(await proxy([1])).toEqual([1]);
     expect(await proxy([1, 2, {}])).toEqual([1, 2, {}]);
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should pass objects', async () => {
@@ -88,7 +88,7 @@ describe('Marshalling', function() {
     expect(await proxy({})).toEqual({});
     expect(await proxy({ foo: 'bar' })).toEqual({ foo: 'bar' });
     expect(await proxy({ foo: { bar: 'baz' } })).toEqual({ foo: { bar: 'baz' } });
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it("should pass Error", async () => {
@@ -106,7 +106,7 @@ describe('Marshalling', function() {
     }
     expect(error instanceof Error).toBe(true);
     expect(await proxy(error)).toEqual(error);
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should pass transferables', async () => {
@@ -133,7 +133,7 @@ describe('Marshalling', function() {
     expect(iArrayX).not.toBe(iArrayY);
     expect(iArrayX.length).toBe(0);
     expect([...iArrayY]).toEqual([1, 2, 3]);
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should pass proxies', async () => {
@@ -155,7 +155,7 @@ describe('Marshalling', function() {
     expect(await functionProxy()).toEqual(f());
 
     Proximate.protocols.delete('function');
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 });
 
@@ -185,7 +185,7 @@ describe('Object member access', function() {
 
     expect(await proxy.value).toBe(obj.value);
     expect(await proxy.foo.bar).toBe(obj.foo.bar);
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 
   it('should set', async () => {
@@ -212,7 +212,7 @@ describe('Object member access', function() {
     proxy.bar = 'baz';
     expect(await proxy.bar).toBe(obj.bar);
     expect(obj.bar).toBe('baz');
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
   });
 });
 
@@ -236,12 +236,12 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2, { debug: null });
 
     await expectAsync(proxy()).toBeResolvedTo(f());
-    expect(Proximate.debug(proxy).proxies.size).toBeGreaterThan(0)
+    expect(proxy[Proximate.DEBUG]().proxies.size).toBeGreaterThan(0)
 
-    Proximate.release(proxy);
+    proxy[Proximate.RELEASE]();
     await expectAsync(proxy()).toBeRejected();
-    expect(Proximate.debug(proxy).proxies.size).toBe(0)
-    await Proximate.close(proxy);
+    expect(proxy[Proximate.DEBUG]().proxies.size).toBe(0)
+    await proxy[Proximate.CLOSE]();
   });
 });
 
@@ -265,7 +265,7 @@ describe('portify()', function() {
     });
     const data = 'Four score';
     expect(await proxy(data)).toBe(data);
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
     iframe.remove();
   });
 
@@ -290,7 +290,7 @@ describe('portify()', function() {
     });
 
     expect(await p).toBe('Lorem ipsum');
-    await Proximate.close(proxy);
+    await proxy[Proximate.CLOSE]();
     iframe.remove();
   });
 });

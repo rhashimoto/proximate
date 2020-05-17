@@ -67,11 +67,6 @@ function nonce(length = 24): string {
   return value.substring(0, length);
 }
 
-// These symbols are used to key special functions on Proxy instances.
-const RELEASE = Symbol('release');
-const CLOSE = Symbol('close');
-const DEBUG = Symbol('debug');
-
 export class Proximate {
   private debug: (message) => void;
 
@@ -202,7 +197,7 @@ export class Proximate {
     const id = path[0] as string;
     const target = () => {};
     if (path.length === 1) {
-      target[RELEASE] = () => {
+      target[Proximate.RELEASE] = () => {
         // Remove the entry for this proxy.
         const proxiesForId = this.proxies.get(id);
         proxiesForId.delete(proxy);
@@ -218,6 +213,7 @@ export class Proximate {
     proxy = new Proxy(target, {
       get: (target, property) => {
         if (typeof property === 'symbol') return target[property];
+        if (!this.proxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         if (property === 'then') {
           if (path.length === 1) return { then: () => proxy };
           const promise = this.sendRequest(endpoint, { path });
@@ -231,6 +227,7 @@ export class Proximate {
           target[property] = value;
           return true;
         }
+        if (!this.proxies.get(id)?.has(proxy)) throw Error('invalid proxy');
         const [wireValue, transferables] = this.serialize(value);
         this.sendRequest(endpoint, {
           path: [...path, property],
@@ -240,6 +237,7 @@ export class Proximate {
       },
 
       apply: (_target, _, args: any[]) => {
+        if (!this.proxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         const serialized = args.map(arg => this.serialize(arg));
         return this.sendRequest(endpoint, {
           path,
@@ -334,8 +332,8 @@ export class Proximate {
 
     // Create the primary proxy.
     const proxy = instance.createLocalProxy(endpoint, ['']);
-    proxy[DEBUG] = () => instance;
-    proxy[CLOSE] = async () => {
+    proxy[Proximate.DEBUG] = () => instance;
+    proxy[Proximate.CLOSE] = async () => {
       // Send a close request with the unreleased proxy counts.
       const remoteProxies = await instance.sendRequest(endpoint, {
         path: [''],
@@ -353,26 +351,13 @@ export class Proximate {
     return proxy;
   }
 
-  // Release remote resources for this proxy. No further method calls
-  // on this proxy should be invoked, results are undefined.
-  static release(proxy: any) {
-    return proxy[RELEASE]();
-  }
-
-  // Close the endpoint the proxy argument was created with. All proxies
-  // on the same endpoint will be released. Must be called with the proxy
-  // returned directly by wrap(), i.e. not a proxy received via an
-  // argument or function call result.
-  static close(primary: any) {
-    return primary[CLOSE]?.();
-  }
-
-  // Get access to Proximate instance internals for debugging. Must be
-  // called with proxy returned directly by wrap(), i.e. not a proxy
-  // received via an argument or function call result.
-  static debug(primary) {
-    return primary[DEBUG]();
-  }
+  // These symbols are used to key special methods on Proxy instances.
+  //  proxy[Proximate.RELEASE]() Release proxy resources
+  //  proxy[Proximate.CLOSE]()   Close connection (on primary only)
+  //  proxy[Proximate.DEBUG]()   Get connection instance (on primary only)
+  static RELEASE = Symbol('release');
+  static CLOSE = Symbol('close');
+  static DEBUG = Symbol('debug');
 
   // Wrap a Window with the MessagePort interface. To listen to
   // an iframe element, use portify(element.contentWindow).
