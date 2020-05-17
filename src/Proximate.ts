@@ -8,8 +8,8 @@ interface Endpoint {
 }
 
 // Extensible object serialization. Custom instances of Protocol can be
-// registered in Proximate.protocols with a string key. The typical use
-// is either to pass by proxy or to specify transferables.
+// registered in Proximate.protocols with a string key. The typical uses
+// are either to pass by proxy or to specify transferables.
 export interface Protocol<T> {
   canHandle(data: unknown): data is T;
   serialize(data: T, registerReceiver: (receiver: any) => string): [any, Transferable[]];
@@ -17,7 +17,7 @@ export interface Protocol<T> {
 }
 
 // Convenience base class for passing objects by proxy. Just override
-// canHandle().
+// canHandle() to identify which objects to proxy.
 export abstract class ProxyProtocol<T> implements Protocol<T> {
   abstract canHandle(data: any): data is T;
 
@@ -295,16 +295,17 @@ export class Proximate {
   }
 
   // Add entries to this map to customize serialization, generally
-  // either to pass by proxy or to specify transferables.
+  // either to pass by proxy or to specify transferables. Registered
+  // protocols must have the same key at both endpoints of a connection.
   static protocols = new Map<string, Protocol<unknown>>([['_error', errorProtocol]]);
 
   // Wrap a MessagePort-like endpoint with a proxy.
   static wrap(
     endpoint: Endpoint,
     options: {
-      receiver?: any,            // Receiver for primary proxy at remote endpoint.
-      shareEndpoint?: boolean,   // If true, don't close endpoint.
-      debug?: (message) => void  // Callback for incoming messages.
+      receiver?: any,           // Receiver for primary proxy at remote endpoint.
+      shareEndpoint?: boolean,  // If true, don't close endpoint when done.
+      debug?: (message) => void // Callback for incoming messages.
     } = {}) {
     const instance = new Proximate();
     instance.debug = options.debug;
@@ -345,11 +346,16 @@ export class Proximate {
   }
 
   // These symbols are used to key special methods on Proxy instances.
-  //  proxy[Proximate.RELEASE]() Release proxy resources
-  //  proxy[Proximate.CLOSE]()   Close connection (on primary only)
-  //  proxy[Proximate.DEBUG]()   Get connection instance (on primary only)
+
+  // Release resources for a proxy.
   static RELEASE = Symbol('release');
+
+  // These symbols are only defined the primary proxy returned from wrap().
+
+  // Release all proxies sharing the endpoint.
   static CLOSE = Symbol('close');
+
+  // Return state for debugging. This is useful for tracking down leaks.
   static DEBUG = Symbol('debug');
 
   // Wrap a Window with the MessagePort interface. To listen to
