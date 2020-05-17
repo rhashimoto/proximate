@@ -144,7 +144,7 @@ export class Proximate {
         [response.error, transferables] = this.serialize(e);
       }
       endpoint.postMessage(response, transferables);
-      if (message.close) this.close?.();
+      if (message.close) this.close();
     } else if (message.id && this.requests.has(message.id)) {
       // Match the response with its request.
       const request = this.requests.get(message.id);
@@ -213,26 +213,6 @@ export class Proximate {
         // Tell the remote endpoint to update the receiver ref count.
         return this.sendRequest(endpoint, { path, release: true });
       };
-      if (id === '') {
-        // These methods are only installed on the primary proxy returned
-        // by wrap().
-        target[DEBUG] = () => this;
-        target[CLOSE] = async () => {
-          // Send a close request with the unreleased proxy counts.
-          const remoteProxies = await this.sendRequest(endpoint, {
-            path,
-            close: this.proxyCounts()
-          }) as Map<string, number>;
-          this.proxies.clear();
-
-          // We get back the unreleased proxy counts from the other
-          // endpoint.
-          this.decReceiverRef(remoteProxies);
-
-          // Close our endpoint.
-          this.close?.();
-        };
-      }
     }
 
     proxy = new Proxy(target, {
@@ -350,11 +330,27 @@ export class Proximate {
     instance.close = () => {
       endpoint.removeEventListener('message', listener);
       endpoint.close?.();
-      instance.close = undefined;
     }
 
     // Create the primary proxy.
-    return instance.createLocalProxy(endpoint, ['']);
+    const proxy = instance.createLocalProxy(endpoint, ['']);
+    proxy[DEBUG] = () => instance;
+    proxy[CLOSE] = async () => {
+      // Send a close request with the unreleased proxy counts.
+      const remoteProxies = await instance.sendRequest(endpoint, {
+        path: [''],
+        close: instance.proxyCounts()
+      }) as Map<string, number>;
+      instance.proxies.clear();
+
+      // We get back the unreleased proxy counts from the other
+      // endpoint.
+      instance.decReceiverRef(remoteProxies);
+
+      // Close our endpoint.
+      instance.close();
+    };
+    return proxy;
   }
 
   // Release remote resources for this proxy. No further method calls
