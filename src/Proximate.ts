@@ -175,9 +175,14 @@ export class Proximate {
 
   private sendRequest(endpoint: Endpoint, request, transferables: Transferable[] = []) {
     return new Promise((resolve, reject) => {
-      request.id = nonce();
-      this.requests.set(request.id, { resolve, reject });
-      endpoint.postMessage(request, transferables);
+      try {
+        request.id = nonce();
+        this.requests.set(request.id, { resolve, reject });
+        endpoint.postMessage(request, transferables);
+      } catch(e) {
+        this.requests.delete(request.id);
+        reject(e);
+      }
     });
   }
 

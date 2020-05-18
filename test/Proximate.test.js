@@ -47,7 +47,10 @@ describe('Marshalling', function() {
     port2.close();
   });
 
-  it('should pass primitives', async () => {
+  // All these tests pass a value in as an argument and get it back
+  // as a result.
+
+  fit('should pass primitives', async () => {
     const objectUnderTest = Proximate.wrap(port1, value => value);
     const proxy = Proximate.wrap(port2);
 
@@ -56,6 +59,7 @@ describe('Marshalling', function() {
     expect(await proxy(false)).toBe(false);
     expect(await proxy(123)).toBe(123);
     expect(await proxy('foobar')).toBe('foobar');
+    await expectAsync(proxy(Symbol("won't work"))).toBeRejected();
     await proxy[Proximate.LINK].close();
   });
 
