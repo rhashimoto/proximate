@@ -12,9 +12,7 @@ describe('Proximate.wrap()', function() {
   });
 
   it('should work with a function', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value
-    });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy(42)).toBe(42);
@@ -22,9 +20,7 @@ describe('Proximate.wrap()', function() {
   });
 
   it('should work with an object member variable', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: { foo: 'bar' }
-    });
+    const objectUnderTest = Proximate.wrap(port1, { foo: 'bar' });
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo).toBe('bar');
@@ -32,9 +28,7 @@ describe('Proximate.wrap()', function() {
   });
 
   it('should work with an object member function', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: { foo: value => value }
-    });
+    const objectUnderTest = Proximate.wrap(port1, { foo: value => value });
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo('bar')).toBe('bar');
@@ -54,9 +48,7 @@ describe('Marshalling', function() {
   });
 
   it('should pass primitives', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value
-    });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy(null)).toBe(null);
@@ -68,9 +60,7 @@ describe('Marshalling', function() {
   });
 
   it('should pass arrays', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value
-    });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy([])).toEqual([]);
@@ -80,9 +70,7 @@ describe('Marshalling', function() {
   });
 
   it('should pass objects', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value
-    });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy({})).toEqual({});
@@ -92,11 +80,8 @@ describe('Marshalling', function() {
   });
 
   it("should pass Error", async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
+    const proxy = Proximate.wrap(port2);
 
     let error;
     try {
@@ -110,11 +95,8 @@ describe('Marshalling', function() {
   });
 
   it('should pass transferables', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
+    const proxy = Proximate.wrap(port2);
 
     Proximate.protocols.set('Int8Array', {
       canHandle(data) {
@@ -145,11 +127,8 @@ describe('Marshalling', function() {
     }
     Proximate.protocols.set('function', new FunctionProtocol());
 
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value
-    });
-    const proxy = Proximate.wrap(port2, {
-    });
+    const objectUnderTest = Proximate.wrap(port1, value => value);
+    const proxy = Proximate.wrap(port2);
 
     const f = () => 91;
     const functionProxy = await proxy(f);
@@ -178,11 +157,8 @@ describe('Object member access', function() {
         bar: 'baz'
       }
     };
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: obj,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
+    const objectUnderTest = Proximate.wrap(port1, obj);
+    const proxy = Proximate.wrap(port2);
 
     expect(await proxy.value).toBe(obj.value);
     expect(await proxy.foo.bar).toBe(obj.foo.bar);
@@ -196,11 +172,8 @@ describe('Object member access', function() {
         bar: 'baz'
       }
     };
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: obj,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
+    const objectUnderTest = Proximate.wrap(port1, obj);
+    const proxy = Proximate.wrap(port2);
 
     proxy.value = 21;
     expect(await proxy.value).toBe(obj.value);
@@ -230,11 +203,8 @@ describe('release', function() {
 
   it('should work', async () => {
     const f = () => 42;
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: f,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
+    const objectUnderTest = Proximate.wrap(port1, f);
+    const proxy = Proximate.wrap(port2);
 
     await expectAsync(proxy()).toBeResolvedTo(f());
     expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
@@ -269,11 +239,8 @@ describe('tracking', function() {
       return 'foo';
     }
 
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: () => f
-    });
-    const proxy = Proximate.wrap(port2, {
-    });
+    const objectUnderTest = Proximate.wrap(port1, () => f);
+    const proxy = Proximate.wrap(port2);
 
     proxy[Proximate.LINK].releaseTracked();
     await expectAsync(proxy()).toBeResolvedTo(f());
@@ -294,11 +261,8 @@ describe('tracking', function() {
       return 'foo';
     }
 
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: () => f
-    });
-    const proxy = Proximate.wrap(port2, {
-    });
+    const objectUnderTest = Proximate.wrap(port1, () => f);
+    const proxy = Proximate.wrap(port2);
 
     const proxyFuncA = await proxy();
     proxy[Proximate.LINK].track();
@@ -323,17 +287,12 @@ describe('portify()', function() {
       iframe.onload = () => resolve(iframe);
       iframe.srcdoc = `<script type="module">
         import { Proximate } from '/dist/es/Proximate.js';
-        Proximate.wrap(Proximate.portify(window.parent), {
-          receiver: (value) => value,
-          debug: null
-        });
+        Proximate.wrap(Proximate.portify(window.parent), (value) => value);
       </script>`;
       document.body.appendChild(iframe);
     });
 
-    const proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), {
-      debug: null
-    });
+    const proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow));
     const data = 'Four score';
     expect(await proxy(data)).toBe(data);
     await proxy[Proximate.LINK].close();
@@ -344,20 +303,14 @@ describe('portify()', function() {
     let iframe = document.createElement('iframe');
     iframe.srcdoc = `<script type="module">
       import { Proximate } from '/dist/es/Proximate.js';
-      const proxy = Proximate.wrap(Proximate.portify(window.parent), {
-        receiver: (value) => value,
-        debug: null
-      });
+      const proxy = Proximate.wrap(Proximate.portify(window.parent), (value) => value);
       proxy('Lorem ipsum');
     </script>`;
     document.body.appendChild(iframe);
 
     let proxy;
     const p = new Promise(resolve => {
-      proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), {
-        receiver: resolve,
-        debug: null
-      });
+      proxy = Proximate.wrap(Proximate.portify(iframe.contentWindow), resolve);
     });
 
     expect(await p).toBe('Lorem ipsum');

@@ -338,16 +338,12 @@ export class Proximate {
   static protocols = new Map<string, Protocol<unknown>>();
 
   // Wrap a MessagePort-like endpoint with a proxy.
-  static wrap(
-    endpoint: Endpoint,
-    options: {
-      receiver?: any,           // Receiver for primary proxy at remote endpoint.
-    } = {}) {
+  static wrap(endpoint: Endpoint, receiver?: any) {
     const instance = new Proximate(endpoint);
-    if (options.receiver) {
+    if (receiver) {
       // Operations on the remote endpoint's primary proxy will
       // be passed to this receiver object.
-      instance.defaultId = instance.incReceiverRef(options.receiver);
+      instance.defaultId = instance.incReceiverRef(receiver);
     }
 
     // Create the primary proxy.
