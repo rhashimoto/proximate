@@ -12,7 +12,7 @@ interface Endpoint {
 // are either to pass by proxy or to specify transferables.
 export interface Protocol<T> {
   canHandle(data: unknown): data is T;
-  serialize(data: T, registerReceiver: (receiver: any) => string): [any, Transferable[]];
+  serialize(data: T, registerReceiver: (receiver: T) => string): [any, Transferable[]];
   deserialize(data: any, createProxy: (id: string) => any): T;
 }
 
@@ -21,7 +21,7 @@ export interface Protocol<T> {
 export abstract class ProxyProtocol<T> implements Protocol<T> {
   abstract canHandle(data: any): data is T;
 
-  serialize(data: any, registerReceiver: (receiver: any) => string): [any, Transferable[]] {
+  serialize(data: T, registerReceiver: (receiver: T) => string): [any, Transferable[]] {
     return [registerReceiver(data), []];
   }
 
@@ -48,10 +48,11 @@ export class Proximate {
   // locally to this valid id.
   defaultId: string;
 
+  // These are custom serialization protocols exclusive to this connection.
   protocols: Map<string, Protocol<unknown>>;
 
   // Each request has a nonce id. When a response from the remote endpoint
-  // arrives, this map uses the id to get the request's Promise callbacks.
+  // arrives, this map is used to get the request's Promise callbacks.
   requests = new Map<string, { resolve, reject }>();
 
   // This map holds a one-to-many mapping from ids to Proxy instances.
