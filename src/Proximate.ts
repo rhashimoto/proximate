@@ -30,24 +30,6 @@ export abstract class ProxyProtocol<T> implements Protocol<T> {
   }
 }
 
-// Protocol to serialize Error instances.
-const errorProtocol: Protocol<Error> = {
-  canHandle(data: any): data is Error {
-    return data instanceof Error;
-  },
-
-  serialize(data): [any, Transferable[]] {
-    return [{
-      message: data.message,
-      stack: data.stack
-    }, []];
-  },
-
-  deserialize(data: any, createProxy: (id: string) => any): any {
-    return Object.assign(new Error(), data);
-  }
-};
-
 // Generate a random string id for proxies and requests.
 function nonce(length = 24): string {
   let value = '';
@@ -65,6 +47,8 @@ export class Proximate {
   // accesses it by convention with the empty string which is converted
   // locally to this valid id.
   defaultId: string;
+
+  protocols: Map<string, Protocol<unknown>>;
 
   // Each request has a nonce id. When a response from the remote endpoint
   // arrives, this map uses the id to get the request's Promise callbacks.
@@ -150,11 +134,20 @@ export class Proximate {
 
   private serialize(data: any): [typeof data, Transferable[]] {
     // Check for custom serialization.
+    for (const [key, handler] of this.protocols.entries()) {
+      if (handler.canHandle(data)) {
+        const [wireValue, transferables] = handler.serialize(data, this.incReceiverRef);
+        return [{ type: key, data: wireValue }, transferables]
+      }
+    }
     for (const [key, handler] of Proximate.protocols.entries()) {
       if (handler.canHandle(data)) {
         const [wireValue, transferables] = handler.serialize(data, this.incReceiverRef);
         return [{ type: key, data: wireValue }, transferables]
       }
+    }
+    if (data instanceof Error) {
+      return [{ error: { message: data.message, stack: data.stack }}, []];
     }
     if (data === Object(data)) {
       return [{ data }, []];
@@ -164,11 +157,14 @@ export class Proximate {
 
   private deserialize(endpoint: Endpoint, data: any) {
     if (data === Object(data)) {
-      if (data.type) {
+      if (data.hasOwnProperty('type')) {
         // This object had custom serialization.
-        const handler = Proximate.protocols.get(data.type);
+        const handler = this.protocols.get(data.type) || Proximate.protocols.get(data.type);
         if (!handler) throw new Error(`unexpected protocol ${data.type}`);
         return handler.deserialize(data.data, id => this.createLocalProxy(endpoint, [id]));
+      }
+      if (data.error) {
+        return Object.assign(new Error(), data.error);
       }
       return data.data;
     }
@@ -304,18 +300,24 @@ export class Proximate {
   // Add entries to this map to customize serialization, generally
   // either to pass by proxy or to specify transferables. Registered
   // protocols must have the same key at both endpoints of a connection.
-  static protocols = new Map<string, Protocol<unknown>>([['_error', errorProtocol]]);
+  static protocols = new Map<string, Protocol<unknown>>();
 
   // Wrap a MessagePort-like endpoint with a proxy.
   static wrap(
     endpoint: Endpoint,
     options: {
       receiver?: any,           // Receiver for primary proxy at remote endpoint.
+      protocols?: Protocol<unknown> | Map<string, Protocol<unknown>>,
       shareEndpoint?: boolean,  // If true, don't close endpoint when done.
       debug?: (message) => void // Callback for incoming messages.
     } = {}) {
     const instance = new Proximate();
     instance.debug = options.debug;
+    if (options.protocols instanceof Map) {
+      instance.protocols = options.protocols;
+    } else {
+      instance.protocols = options.protocols ? new Map([['', options.protocols]]) : new Map();
+    }
     if (options.receiver) {
       // Operations on the remote endpoint's primary proxy will
       // be passed to this receiver object.

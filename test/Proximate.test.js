@@ -133,28 +133,31 @@ describe('Marshalling', function() {
     expect(iArrayX).not.toBe(iArrayY);
     expect(iArrayX.length).toBe(0);
     expect([...iArrayY]).toEqual([1, 2, 3]);
+    Proximate.protocols.delete('Int8Array');
     await proxy[Proximate.CLOSE]();
   });
 
   it('should pass proxies', async () => {
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
-
     class FunctionProtocol extends ProxyProtocol {
       canHandle(data) {
         return typeof data === 'function';
       }
     }
-    Proximate.protocols.set('function', new FunctionProtocol());
+
+    const objectUnderTest = Proximate.wrap(port1, {
+      receiver: value => value,
+      protocols: new FunctionProtocol(),
+      debug: null
+    });
+    const proxy = Proximate.wrap(port2, {
+      protocols: new FunctionProtocol(),
+      debug: null
+    });
 
     const f = () => 91;
     const functionProxy = await proxy(f);
     expect(await functionProxy()).toEqual(f());
 
-    Proximate.protocols.delete('function');
     await proxy[Proximate.CLOSE]();
   });
 });
@@ -257,45 +260,51 @@ describe('tracking', function() {
   });
 
   it('RELEASE_TRACKED should not release the primary', async () => {
-    function f() {
-      return 'foo';
-    }
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: () => f,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
-
     class FunctionProtocol extends ProxyProtocol {
       canHandle(data) {
         return typeof data === 'function';
       }
     }
-    Proximate.protocols.set('function', new FunctionProtocol());
+
+    function f() {
+      return 'foo';
+    }
+
+    const objectUnderTest = Proximate.wrap(port1, {
+      receiver: () => f,
+      protocols: new Map([['function', new FunctionProtocol]]),
+      debug: null
+    });
+    const proxy = Proximate.wrap(port2, {
+      protocols: new Map([['function', new FunctionProtocol]]),
+      debug: null
+    });
 
     proxy[Proximate.RELEASE_TRACKED]();
     await expectAsync(proxy()).toBeResolved();
 
-    Proximate.protocols.delete('function');
     await proxy[Proximate.CLOSE]();
   });
 
   it('RELEASE_TRACKED should release after TRACK', async () => {
-    function f() {
-      return 'foo';
-    }
-    const objectUnderTest = Proximate.wrap(port1, {
-      receiver: () => f,
-      debug: null
-    });
-    const proxy = Proximate.wrap(port2, { debug: null });
-
     class FunctionProtocol extends ProxyProtocol {
       canHandle(data) {
         return typeof data === 'function';
       }
     }
-    Proximate.protocols.set('function', new FunctionProtocol());
+
+    function f() {
+      return 'foo';
+    }
+    const objectUnderTest = Proximate.wrap(port1, {
+      receiver: () => f,
+      protocols: new Map([['function', new FunctionProtocol]]),
+      debug: null
+    });
+    const proxy = Proximate.wrap(port2, {
+      protocols: new Map([['function', new FunctionProtocol]]),
+      debug: null
+    });
 
     const proxyFuncA = await proxy();
     proxy[Proximate.TRACK]();
@@ -309,7 +318,6 @@ describe('tracking', function() {
     await expectAsync(proxyFuncA()).toBeResolvedTo(f());
     await expectAsync(proxyFuncB()).toBeRejected();
 
-    Proximate.protocols.delete('function');
     await proxy[Proximate.CLOSE]();
   });
 });
