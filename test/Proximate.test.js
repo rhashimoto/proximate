@@ -243,7 +243,7 @@ describe('tracking', function() {
     const proxy = Proximate.wrap(port2);
 
     proxy[Proximate.LINK].releaseTracked();
-    await expectAsync(proxy()).toBeResolvedTo(f());
+    await expectAsync(proxy()).toBeResolved();
 
     Proximate.protocols.delete('function');
     await proxy[Proximate.LINK].close();

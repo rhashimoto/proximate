@@ -207,7 +207,7 @@ export class Proximate {
         if (typeof property === 'symbol') return target[property];
         if (!this.mapIdToProxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         if (property === 'then') {
-          if (path.length === 1) return { then: () => proxy };
+          if (path.length === 1) return { then: (f) => f(proxy) };
           const promise = this.sendRequest(endpoint, { path });
           return promise.then.bind(promise);
         }
