@@ -40,16 +40,11 @@ function nonce(length = 24): string {
 }
 
 export class Proximate {
-  private debug: (message) => void;
-
   // The receiver passed as an option to wrap() is not sent by proxy,
   // i.e. its id is not passed over the wire. Instead the remote endpoint
   // accesses it by convention with the empty string which is converted
   // locally to this valid id.
   defaultId: string;
-
-  // These are custom serialization protocols exclusive to this connection.
-  protocols: Map<string, Protocol<unknown>>;
 
   // Each request has a nonce id. When a response from the remote endpoint
   // arrives, this map is used to get the request's Promise callbacks.
@@ -65,10 +60,16 @@ export class Proximate {
   // This map tracks proxies created from a specific point in time.
   trackedProxies = new Set<any>();
 
-  // Clean up and close endpoint (assigned in wrap).
-  private close: () => void;
+  debug: (message) => void;
+  listener: EventListener = event => this.handleMessage(event as MessageEvent);
 
-  private async handleMessage(endpoint: Endpoint, message: any) {
+  private constructor(private endpoint: Endpoint) {
+    this.endpoint.addEventListener('message', this.listener);
+    this.endpoint.start?.();
+  }
+
+  private async handleMessage(event: MessageEvent) {
+    const message = event.data;
     this.debug?.(message);
     if (message.id && message.path) {
       // Handle incoming request (build response).
@@ -92,7 +93,7 @@ export class Proximate {
         let result;
         if (message.args) {
           // Function call.
-          const args = message.args.map(arg => this.deserialize(endpoint, arg));
+          const args = message.args.map(arg => this.deserialize(this.endpoint, arg));
           result = await receiver.apply(parent, args);
         } else if (message.release) {
           // Remote proxy is released.
@@ -105,7 +106,7 @@ export class Proximate {
           // Member access.
           if (message.hasOwnProperty('value')) {
             // Set member.
-            parent[tail] = this.deserialize(endpoint, message.value);
+            parent[tail] = this.deserialize(this.endpoint, message.value);
           } else {
             // Get member.
             result = receiver;
@@ -115,17 +116,17 @@ export class Proximate {
       } catch(e) {
         [response.error, transferables] = this.serialize(e);
       }
-      endpoint.postMessage(response, transferables);
+      this.endpoint.postMessage(response, transferables);
       if (message.close) this.close();
     } else if (message.id && this.requests.has(message.id)) {
       // Match the response with its request.
       const request = this.requests.get(message.id);
       this.requests.delete(message.id);
       if (message.hasOwnProperty('result')) {
-        const result = this.deserialize(endpoint, message.result);
+        const result = this.deserialize(this.endpoint, message.result);
         request.resolve(result);
       } else {
-        const error = this.deserialize(endpoint, message.error);
+        const error = this.deserialize(this.endpoint, message.error);
         request.reject(error);
       }
     } else {
@@ -198,6 +199,7 @@ export class Proximate {
         // Tell the remote endpoint to update the receiver ref count.
         return this.sendRequest(endpoint, { path, release: new Map([[id, 1]]) });
       };
+      target[Proximate.LINK] = this;
     }
 
     proxy = new Proxy(target, {
@@ -298,9 +300,41 @@ export class Proximate {
     });
   }
 
-  // Add entries to this map to customize serialization, generally
+  async close() {
+    // Send a close request with the unreleased proxy counts.
+    const remoteProxies = await this.sendRequest(this.endpoint, {
+      path: [''],
+      close: this.proxyCounts()
+    }) as Map<string, number>;
+    this.mapIdToProxies.clear();
+    this.trackedProxies.clear();
+
+    // We get back the unreleased proxy counts from the other
+    // endpoint.
+    this.decReceiverRef(remoteProxies);
+
+    // Close the connection.
+    this.endpoint.removeEventListener('message', this.listener);
+    this.endpoint.close?.();
+  }
+
+  // Release proxies from a specific point in time. The beginning point
+  // is marked with track() and proxies are released with releaseTracked().
+  track() {
+    this.trackedProxies.clear();
+  };
+  releaseTracked() {
+    for (const trackedProxy of this.trackedProxies.values()) {
+      trackedProxy[Proximate.RELEASE]();
+    };
+    this.trackedProxies.clear();
+  };
+
+ // Add entries to these maps to customize serialization, generally
   // either to pass by proxy or to specify transferables. Registered
   // protocols must have the same key at both endpoints of a connection.
+  // Both per-connection and global specification are available.
+  protocols = new Map<string, Protocol<unknown>>();
   static protocols = new Map<string, Protocol<unknown>>();
 
   // Wrap a MessagePort-like endpoint with a proxy.
@@ -308,80 +342,21 @@ export class Proximate {
     endpoint: Endpoint,
     options: {
       receiver?: any,           // Receiver for primary proxy at remote endpoint.
-      protocols?: Protocol<unknown> | Map<string, Protocol<unknown>>,
-      shareEndpoint?: boolean,  // If true, don't close endpoint when done.
-      debug?: (message) => void // Callback for incoming messages.
     } = {}) {
-    const instance = new Proximate();
-    instance.debug = options.debug;
-    if (options.protocols instanceof Map) {
-      instance.protocols = options.protocols;
-    } else {
-      instance.protocols = options.protocols ? new Map([['', options.protocols]]) : new Map();
-    }
+    const instance = new Proximate(endpoint);
     if (options.receiver) {
       // Operations on the remote endpoint's primary proxy will
       // be passed to this receiver object.
       instance.defaultId = instance.incReceiverRef(options.receiver);
     }
 
-    // Hook up the message passing.
-    const listener = (event: MessageEvent) => instance.handleMessage(endpoint, event.data);
-    endpoint.addEventListener('message', listener);
-    endpoint.start?.();
-    instance.close = () => {
-      endpoint.removeEventListener('message', listener);
-      if (!options.shareEndpoint) endpoint.close?.();
-    }
-
     // Create the primary proxy.
-    const proxy = instance.createLocalProxy(endpoint, ['']);
-    proxy[Proximate.DEBUG] = () => instance;
-    proxy[Proximate.CLOSE] = async () => {
-      // Send a close request with the unreleased proxy counts.
-      const remoteProxies = await instance.sendRequest(endpoint, {
-        path: [''],
-        close: instance.proxyCounts()
-      }) as Map<string, number>;
-      instance.mapIdToProxies.clear();
-      instance.trackedProxies.clear();
-
-      // We get back the unreleased proxy counts from the other
-      // endpoint.
-      instance.decReceiverRef(remoteProxies);
-
-      // Close our endpoint.
-      instance.close();
-    };
-    proxy[Proximate.TRACK] = () => {
-      instance.trackedProxies.clear();
-    };
-    proxy[Proximate.RELEASE_TRACKED] = () => {
-      for (const trackedProxy of instance.trackedProxies.values()) {
-        trackedProxy[Proximate.RELEASE]();
-      };
-      instance.trackedProxies.clear();
-    };
-    return proxy;
+    return instance.createLocalProxy(endpoint, ['']);
   }
 
-  // These symbols are used to key special methods on Proxy instances.
-
-  // Release resources for a proxy.
+  // These symbols are used to key special members on Proxy instances.
   static RELEASE = Symbol('release');
-
-  // These symbols are only defined on the primary proxy returned from wrap().
-
-  // Release all proxies sharing the endpoint.
-  static CLOSE = Symbol('close');
-
-  // Track and relase proxies. RELEASE_TRACKED releases all local proxies
-  // created since the last call to TRACK.
-  static TRACK = Symbol('track_proxies');
-  static RELEASE_TRACKED = Symbol('clear_proxies');
-
-  // Return state for debugging.
-  static DEBUG = Symbol('debug');
+  static LINK = Symbol('link');
 
   // Wrap a Window with the MessagePort interface. To listen to
   // an iframe element, use portify(element.contentWindow).

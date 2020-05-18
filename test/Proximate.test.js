@@ -18,7 +18,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy(42)).toBe(42);
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should work with an object member variable', async () => {
@@ -28,7 +28,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo).toBe('bar');
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should work with an object member function', async () => {
@@ -38,7 +38,7 @@ describe('Proximate.wrap()', function() {
     const proxy = Proximate.wrap(port2);
 
     expect(await proxy.foo('bar')).toBe('bar');
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 });
 
@@ -64,7 +64,7 @@ describe('Marshalling', function() {
     expect(await proxy(false)).toBe(false);
     expect(await proxy(123)).toBe(123);
     expect(await proxy('foobar')).toBe('foobar');
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should pass arrays', async () => {
@@ -76,7 +76,7 @@ describe('Marshalling', function() {
     expect(await proxy([])).toEqual([]);
     expect(await proxy([1])).toEqual([1]);
     expect(await proxy([1, 2, {}])).toEqual([1, 2, {}]);
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should pass objects', async () => {
@@ -88,7 +88,7 @@ describe('Marshalling', function() {
     expect(await proxy({})).toEqual({});
     expect(await proxy({ foo: 'bar' })).toEqual({ foo: 'bar' });
     expect(await proxy({ foo: { bar: 'baz' } })).toEqual({ foo: { bar: 'baz' } });
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it("should pass Error", async () => {
@@ -106,7 +106,7 @@ describe('Marshalling', function() {
     }
     expect(error instanceof Error).toBe(true);
     expect(await proxy(error)).toEqual(error);
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should pass transferables', async () => {
@@ -134,7 +134,7 @@ describe('Marshalling', function() {
     expect(iArrayX.length).toBe(0);
     expect([...iArrayY]).toEqual([1, 2, 3]);
     Proximate.protocols.delete('Int8Array');
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should pass proxies', async () => {
@@ -143,22 +143,20 @@ describe('Marshalling', function() {
         return typeof data === 'function';
       }
     }
+    Proximate.protocols.set('function', new FunctionProtocol());
 
     const objectUnderTest = Proximate.wrap(port1, {
-      receiver: value => value,
-      protocols: new FunctionProtocol(),
-      debug: null
+      receiver: value => value
     });
     const proxy = Proximate.wrap(port2, {
-      protocols: new FunctionProtocol(),
-      debug: null
     });
 
     const f = () => 91;
     const functionProxy = await proxy(f);
     expect(await functionProxy()).toEqual(f());
 
-    await proxy[Proximate.CLOSE]();
+    Proximate.protocols.delete('function');
+    await proxy[Proximate.LINK].close();
   });
 });
 
@@ -188,7 +186,7 @@ describe('Object member access', function() {
 
     expect(await proxy.value).toBe(obj.value);
     expect(await proxy.foo.bar).toBe(obj.foo.bar);
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 
   it('should set', async () => {
@@ -215,7 +213,7 @@ describe('Object member access', function() {
     proxy.bar = 'baz';
     expect(await proxy.bar).toBe(obj.bar);
     expect(obj.bar).toBe('baz');
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 });
 
@@ -239,12 +237,12 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2, { debug: null });
 
     await expectAsync(proxy()).toBeResolvedTo(f());
-    expect(proxy[Proximate.DEBUG]().mapIdToProxies.size).toBeGreaterThan(0)
+    expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
 
     proxy[Proximate.RELEASE]();
     await expectAsync(proxy()).toBeRejected();
-    expect(proxy[Proximate.DEBUG]().mapIdToProxies.size).toBe(0)
-    await proxy[Proximate.CLOSE]();
+    expect(proxy[Proximate.LINK].mapIdToProxies.size).toBe(0)
+    await proxy[Proximate.LINK].close();
   });
 });
 
@@ -265,25 +263,23 @@ describe('tracking', function() {
         return typeof data === 'function';
       }
     }
+    Proximate.protocols.set('function', new FunctionProtocol());
 
     function f() {
       return 'foo';
     }
 
     const objectUnderTest = Proximate.wrap(port1, {
-      receiver: () => f,
-      protocols: new Map([['function', new FunctionProtocol]]),
-      debug: null
+      receiver: () => f
     });
     const proxy = Proximate.wrap(port2, {
-      protocols: new Map([['function', new FunctionProtocol]]),
-      debug: null
     });
 
-    proxy[Proximate.RELEASE_TRACKED]();
-    await expectAsync(proxy()).toBeResolved();
+    proxy[Proximate.LINK].releaseTracked();
+    await expectAsync(proxy()).toBeResolvedTo(f());
 
-    await proxy[Proximate.CLOSE]();
+    Proximate.protocols.delete('function');
+    await proxy[Proximate.LINK].close();
   });
 
   it('RELEASE_TRACKED should release after TRACK', async () => {
@@ -292,33 +288,31 @@ describe('tracking', function() {
         return typeof data === 'function';
       }
     }
+    Proximate.protocols.set('function', new FunctionProtocol());
 
     function f() {
       return 'foo';
     }
+
     const objectUnderTest = Proximate.wrap(port1, {
-      receiver: () => f,
-      protocols: new Map([['function', new FunctionProtocol]]),
-      debug: null
+      receiver: () => f
     });
     const proxy = Proximate.wrap(port2, {
-      protocols: new Map([['function', new FunctionProtocol]]),
-      debug: null
     });
 
     const proxyFuncA = await proxy();
-    proxy[Proximate.TRACK]();
+    proxy[Proximate.LINK].track();
     const proxyFuncB = await proxy();
 
     await expectAsync(proxyFuncA()).toBeResolvedTo(f());
     await expectAsync(proxyFuncB()).toBeResolvedTo(f());
 
-    proxy[Proximate.RELEASE_TRACKED]();
+    proxy[Proximate.LINK].releaseTracked();
 
     await expectAsync(proxyFuncA()).toBeResolvedTo(f());
     await expectAsync(proxyFuncB()).toBeRejected();
 
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
   });
 });
 
@@ -342,7 +336,7 @@ describe('portify()', function() {
     });
     const data = 'Four score';
     expect(await proxy(data)).toBe(data);
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
     iframe.remove();
   });
 
@@ -367,7 +361,7 @@ describe('portify()', function() {
     });
 
     expect(await p).toBe('Lorem ipsum');
-    await proxy[Proximate.CLOSE]();
+    await proxy[Proximate.LINK].close();
     iframe.remove();
   });
 });
