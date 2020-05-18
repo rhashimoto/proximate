@@ -323,11 +323,13 @@ export class Proximate {
   track() {
     this.trackedProxies.clear();
   };
-  releaseTracked() {
+  async releaseTracked() {
+    const releases = [];
     for (const trackedProxy of this.trackedProxies.values()) {
-      trackedProxy[Proximate.RELEASE]();
+      releases.push(trackedProxy[Proximate.RELEASE]());
     };
     this.trackedProxies.clear();
+    await Promise.all(releases);
   };
 
  // Add entries to these maps to customize serialization, generally
