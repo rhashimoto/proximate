@@ -10,22 +10,29 @@ interface Endpoint {
 // Extensible object serialization. Custom instances of Protocol can be
 // registered in Proximate.protocols with a string key. The typical uses
 // are either to pass by proxy or to specify transferables.
-export interface Protocol<T> {
+export interface Protocol<T, S> {
+  // Returns a boolean indicating whether this protocol should be used.
   canHandle(data: unknown): data is T;
-  serialize(data: T, registerReceiver: (receiver: T) => string): [any, Transferable[]];
-  deserialize(data: any, createProxy: (id: string) => any): T;
+
+  // Returns serialized data and its list of Transferables as a tuple.
+  // Use registerReceiver() to get a proxy id for some data (usually
+  // the data argument).
+  serialize(data: T, registerReceiver: (receiver: unknown) => string): [S, Transferable[]];
+
+  // Returns deserialized data. Use createProxy() to create a proxy
+  // instance from a proxy id.
+  deserialize(data: S, createProxy: (id: string) => any): T;
 }
 
 // Convenience base class for passing objects by proxy. Just override
 // canHandle() to identify which objects to proxy.
-export abstract class ProxyProtocol<T> implements Protocol<T> {
-  abstract canHandle(data: any): data is T;
+export abstract class ProxyProtocol<T> implements Protocol<T, string> {
+  abstract canHandle(data: unknown): data is T;
 
-  serialize(data: T, registerReceiver: (receiver: T) => string): [any, Transferable[]] {
+  serialize(data: T, registerReceiver: (receiver: T) => string): [string, Transferable[]] {
     return [registerReceiver(data), []];
   }
-
-  deserialize(data: any, createProxy: (id: string) => any): T {
+  deserialize(data: string, createProxy: (id: string) => any): T {
     return createProxy(data);
   }
 }
@@ -135,13 +142,14 @@ export class Proximate {
   }
 
   private serialize(data: any): [typeof data, Transferable[]] {
-    // Check for custom serialization.
+    // Check for per-instance custom serialization.
     for (const [key, handler] of this.protocols.entries()) {
       if (handler.canHandle(data)) {
         const [wireValue, transferables] = handler.serialize(data, this.incReceiverRef);
         return [{ type: key, data: wireValue }, transferables]
       }
     }
+    // Check for global custom serialization.
     for (const [key, handler] of Proximate.protocols.entries()) {
       if (handler.canHandle(data)) {
         const [wireValue, transferables] = handler.serialize(data, this.incReceiverRef);
@@ -162,7 +170,7 @@ export class Proximate {
       if (data.hasOwnProperty('type')) {
         // This object had custom serialization.
         const handler = this.protocols.get(data.type) || Proximate.protocols.get(data.type);
-        if (!handler) throw new Error(`unexpected protocol ${data.type}`);
+        if (!handler) throw new Error(`unregistered protocol '${data.type}'`);
         return handler.deserialize(data.data, id => this.createLocalProxy(endpoint, [id]));
       }
       if (data.error) {
@@ -176,6 +184,7 @@ export class Proximate {
   private sendRequest(endpoint: Endpoint, request, transferables: Transferable[] = []) {
     return new Promise((resolve, reject) => {
       try {
+        // Register request for lookup when response arrives.
         request.id = nonce();
         this.requests.set(request.id, { resolve, reject });
         endpoint.postMessage(request, transferables);
@@ -348,8 +357,8 @@ export class Proximate {
   // either to pass by proxy or to specify transferables. Registered
   // protocols must have the same key at both endpoints of a connection.
   // Both per-connection and global specification are available.
-  public protocols = new Map<string, Protocol<unknown>>();
-  public static protocols = new Map<string, Protocol<unknown>>();
+  public protocols = new Map<string, Protocol<unknown, unknown>>();
+  public static protocols = new Map<string, Protocol<unknown, unknown>>();
 
   // Wrap a MessagePort-like endpoint with a proxy.
   public static wrap(endpoint: Endpoint, receiver?: any) {

@@ -322,7 +322,7 @@ describe('tracking', function() {
     port2.close();
   });
 
-  it('RELEASE_TRACKED should not release the primary', async () => {
+  it('releaseTracked should not release the primary', async () => {
     class FunctionProtocol extends ProxyProtocol {
       canHandle(data) {
         return typeof data === 'function';
@@ -344,7 +344,7 @@ describe('tracking', function() {
     await proxy[Proximate.LINK].close();
   });
 
-  it('RELEASE_TRACKED should release after TRACK', async () => {
+  it('releaseTracked should release after track', async () => {
     class FunctionProtocol extends ProxyProtocol {
       canHandle(data) {
         return typeof data === 'function';
