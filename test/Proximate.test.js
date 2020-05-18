@@ -50,7 +50,7 @@ describe('Marshalling', function() {
   // All these tests pass a value in as an argument and get it back
   // as a result.
 
-  fit('should pass primitives', async () => {
+  it('should pass primitives', async () => {
     const objectUnderTest = Proximate.wrap(port1, value => value);
     const proxy = Proximate.wrap(port2);
 
@@ -228,6 +228,63 @@ describe('release', function() {
     await proxy[Proximate.LINK].close();
   });
 });
+
+describe('protocols', function() {
+  let port1, port2;
+  beforeEach(() => {
+    ({ port1, port2 } = new MessageChannel());
+  });
+
+  afterEach(() => {
+    port1.close();
+    port2.close();
+  });
+
+  it('global', async () => {
+    class FunctionProtocol extends ProxyProtocol {
+      canHandle(data) {
+        return typeof data === 'function';
+      }
+    }
+    Proximate.protocols.set('function', new FunctionProtocol());
+
+    function f() {
+      return 'foo';
+    }
+
+    const objectUnderTest = Proximate.wrap(port1, () => f);
+    const proxy = Proximate.wrap(port2);
+
+    const functionProxy = await proxy();
+    expect(await functionProxy()).toBe(f());
+
+    Proximate.protocols.delete('function');
+    proxy[Proximate.LINK].close();
+  });
+
+  it('instance', async () => {
+    class FunctionProtocol extends ProxyProtocol {
+      canHandle(data) {
+        return typeof data === 'function';
+      }
+    }
+
+    function f() {
+      return 'foo';
+    }
+
+    const objectUnderTest = Proximate.wrap(port1, () => f);
+    const proxy = Proximate.wrap(port2);
+
+    objectUnderTest[Proximate.LINK].protocols.set('function', new FunctionProtocol());
+    proxy[Proximate.LINK].protocols.set('function', new FunctionProtocol());
+
+    const functionProxy = await proxy();
+    expect(await functionProxy()).toBe(f());
+
+    Proximate.protocols.delete('function');
+    proxy[Proximate.LINK].close();
+  });});
 
 describe('tracking', function() {
   let port1, port2;
