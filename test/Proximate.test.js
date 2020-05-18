@@ -227,6 +227,31 @@ describe('release', function() {
     expect(Proximate.mapObjectToId.get(f)).not.toBeDefined();
     await proxy[Proximate.LINK].close();
   });
+
+  it ('is idempontent', async () => {
+    const f = () => 42;
+    const objectUnderTest = Proximate.wrap(port1, f);
+    const proxy = Proximate.wrap(port2);
+
+    // Verify that initially the proxy works.
+    const id = Proximate.mapObjectToId.get(f);
+    await expectAsync(proxy()).toBeResolvedTo(f());
+    expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
+    expect(Proximate.mapIdToObject.get(id)).toBeDefined();
+
+    await proxy[Proximate.RELEASE]();
+    await proxy[Proximate.RELEASE]();
+    await proxy[Proximate.RELEASE]();
+
+    // Verify the proxy no longer works.
+    await expectAsync(proxy()).toBeRejected();
+
+    // Verify the internal mappings are gone.
+    expect(proxy[Proximate.LINK].mapIdToProxies.size).toBe(0)
+    expect(Proximate.mapIdToObject.get(id)).not.toBeDefined();
+    expect(Proximate.mapObjectToId.get(f)).not.toBeDefined();
+    await proxy[Proximate.LINK].close();
+  });
 });
 
 describe('protocols', function() {

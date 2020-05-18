@@ -196,13 +196,15 @@ export class Proximate {
         // Remove the entry for this proxy.
         this.trackedProxies.delete(proxy);
         const proxiesForId = this.mapIdToProxies.get(id);
-        proxiesForId.delete(proxy);
-        if (proxiesForId.size === 0) {
+        const deleted = proxiesForId?.delete(proxy);
+        if (proxiesForId?.size === 0) {
           this.mapIdToProxies.delete(id);
         }
 
         // Tell the remote endpoint to update the receiver ref count.
-        return this.sendRequest(endpoint, { path, release: new Map([[id, 1]]) });
+        return deleted ?
+          this.sendRequest(endpoint, { path, release: new Map([[id, 1]]) }) :
+          Promise.resolve();
       };
       target[Proximate.LINK] = this;
     }
@@ -305,7 +307,12 @@ export class Proximate {
     });
   }
 
-  async close() {
+  // Initiate release of all local and remote proxies.
+  public async close() {
+    const listener = this.listener;
+    this.listener = null;
+    if (!listener) return;
+
     // Send a close request with the unreleased proxy counts.
     const remoteProxies = await this.sendRequest(this.endpoint, {
       path: [''],
@@ -319,16 +326,16 @@ export class Proximate {
     this.decReceiverRef(remoteProxies);
 
     // Close the connection.
-    this.endpoint.removeEventListener('message', this.listener);
+    this.endpoint.removeEventListener('message', listener);
     this.endpoint.close?.();
   }
 
   // Release proxies from a specific point in time. The beginning point
   // is marked with track() and proxies are released with releaseTracked().
-  track() {
+  public track() {
     this.trackedProxies.clear();
   };
-  async releaseTracked() {
+  public async releaseTracked() {
     const releases = [];
     for (const trackedProxy of this.trackedProxies.values()) {
       releases.push(trackedProxy[Proximate.RELEASE]());
@@ -337,15 +344,15 @@ export class Proximate {
     await Promise.all(releases);
   };
 
- // Add entries to these maps to customize serialization, generally
+  // Add entries to these maps to customize serialization, generally
   // either to pass by proxy or to specify transferables. Registered
   // protocols must have the same key at both endpoints of a connection.
   // Both per-connection and global specification are available.
-  protocols = new Map<string, Protocol<unknown>>();
-  static protocols = new Map<string, Protocol<unknown>>();
+  public protocols = new Map<string, Protocol<unknown>>();
+  public static protocols = new Map<string, Protocol<unknown>>();
 
   // Wrap a MessagePort-like endpoint with a proxy.
-  static wrap(endpoint: Endpoint, receiver?: any) {
+  public static wrap(endpoint: Endpoint, receiver?: any) {
     const instance = new Proximate(endpoint);
     if (receiver) {
       // Operations on the remote endpoint's primary proxy will
@@ -357,14 +364,18 @@ export class Proximate {
     return instance.createLocalProxy(endpoint, ['']);
   }
 
-  // These symbols are used to key special members on Proxy instances.
-  static RELEASE = Symbol('release');
-  static LINK = Symbol('link');
+  // This key accesses a proxy member function that releases the
+  // resources used by the proxy. The proxy subsequently should not
+  // be used, except for LINK access.
+  public static RELEASE = Symbol('release');
+
+  // The key accesses the Proximate instance for a proxy.
+  public static LINK = Symbol('link');
 
   // Wrap a Window with the MessagePort interface. To listen to
   // an iframe element, use portify(element.contentWindow).
   // Inside the iframe, use portify(window.parent).
-  static portify(window: any, eventSource: any = self, targetOrigin = '*') {
+  public static portify(window: any, eventSource: any = self, targetOrigin = '*') {
     return {
       postMessage(message: object, transferables: Transferable[]) {
         window.postMessage(message, targetOrigin, transferables);
