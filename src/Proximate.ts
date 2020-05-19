@@ -59,9 +59,7 @@ export class Proximate {
 
   // This map holds a one-to-many mapping from ids to Proxy instances.
   // When the connection is closed, reference counts derived from this
-  // data is sent to the remote endpoint to reclaim resources. It may
-  // also be accessed via the proxies() static member function for
-  // debugging leaks.
+  // data is sent to the remote endpoint to reclaim resources.
   mapIdToProxies = new Map<string, Set<any>>();
 
   // This map tracks proxies created from a specific point in time.
@@ -186,7 +184,7 @@ export class Proximate {
     return new Promise((resolve, reject) => {
       try {
         // Register request for lookup when response arrives.
-        request.id = nonce();
+        request.id = nonce(16);
         this.requests.set(request.id, { resolve, reject });
         endpoint.postMessage(request, transferables);
       } catch(e) {
