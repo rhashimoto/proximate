@@ -68,6 +68,7 @@ export class Proximate {
   trackedProxies = new Set<any>();
 
   debug: (message) => void;
+  isClosingOrClosed = false;
   listener: EventListener = event => this.handleMessage(event as MessageEvent);
 
   private constructor(private endpoint: Endpoint) {
@@ -124,7 +125,7 @@ export class Proximate {
         [response.error, transferables] = this.serialize(e);
       }
       this.endpoint.postMessage(response, transferables);
-      if (message.close) this.close();
+      if (message.close) this.close(false);
     } else if (message.id && this.requests.has(message.id)) {
       // Match the response with its request.
       const request = this.requests.get(message.id);
@@ -317,25 +318,26 @@ export class Proximate {
   }
 
   // Initiate release of all local and remote proxies.
-  public async close() {
-    const listener = this.listener;
-    this.listener = null;
-    if (!listener) return;
+  public async close(full = true) {
+    if (this.isClosingOrClosed) return;
+    this.isClosingOrClosed = true;
 
-    // Send a close request with the unreleased proxy counts.
-    const remoteProxies = await this.sendRequest(this.endpoint, {
-      path: [''],
-      close: this.proxyCounts()
-    }) as Map<string, number>;
-    this.mapIdToProxies.clear();
-    this.trackedProxies.clear();
+    if (full) {
+      // Send a close request with the unreleased proxy counts.
+      const remoteProxies = await this.sendRequest(this.endpoint, {
+        path: [''],
+        close: this.proxyCounts()
+      }) as Map<string, number>;
+      this.mapIdToProxies.clear();
+      this.trackedProxies.clear();
 
-    // We get back the unreleased proxy counts from the other
-    // endpoint.
-    this.decReceiverRef(remoteProxies);
+      // We get back the unreleased proxy counts from the other
+      // endpoint.
+      this.decReceiverRef(remoteProxies);
+    }
 
     // Close the connection.
-    this.endpoint.removeEventListener('message', listener);
+    this.endpoint.removeEventListener('message', this.listener);
     this.endpoint.close?.();
   }
 
