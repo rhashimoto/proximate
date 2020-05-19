@@ -228,7 +228,7 @@ describe('release', function() {
     await proxy[Proximate.LINK].close();
   });
 
-  it ('is idempontent', async () => {
+    it ('is idempotent', async () => {
     const f = () => 42;
     const objectUnderTest = Proximate.wrap(port1, f);
     const proxy = Proximate.wrap(port2);
@@ -248,6 +248,64 @@ describe('release', function() {
 
     // Verify the internal mappings are gone.
     expect(proxy[Proximate.LINK].mapIdToProxies.size).toBe(0)
+    expect(Proximate.mapIdToReceiver.get(id)).not.toBeDefined();
+    expect(Proximate.mapReceiverToId.get(f)).not.toBeDefined();
+    await proxy[Proximate.LINK].close();
+  });
+});
+
+describe('revokeProxiesForReceiver', function() {
+  let port1, port2;
+  beforeEach(() => {
+    ({ port1, port2 } = new MessageChannel());
+  });
+
+  afterEach(() => {
+    port1.close();
+    port2.close();
+  });
+
+  it('should work', async () => {
+    const f = () => 42;
+    const objectUnderTest = Proximate.wrap(port1, f);
+    const proxy = Proximate.wrap(port2);
+
+    // Verify that initially the proxy works.
+    const id = Proximate.mapReceiverToId.get(f);
+    await expectAsync(proxy()).toBeResolvedTo(f());
+    expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
+    expect(Proximate.mapIdToReceiver.get(id)).toBeDefined();
+
+    await Proximate.revokeProxiesForReceiver(f);
+
+    // Verify the proxy no longer works.
+    await expectAsync(proxy()).toBeRejected();
+
+    // Verify the internal mappings are gone.
+    expect(Proximate.mapIdToReceiver.get(id)).not.toBeDefined();
+    expect(Proximate.mapReceiverToId.get(f)).not.toBeDefined();
+    await proxy[Proximate.LINK].close();
+  });
+
+  it('is idempotent', async () => {
+    const f = () => 42;
+    const objectUnderTest = Proximate.wrap(port1, f);
+    const proxy = Proximate.wrap(port2);
+
+    // Verify that initially the proxy works.
+    const id = Proximate.mapReceiverToId.get(f);
+    await expectAsync(proxy()).toBeResolvedTo(f());
+    expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
+    expect(Proximate.mapIdToReceiver.get(id)).toBeDefined();
+
+    await Proximate.revokeProxiesForReceiver(f);
+    await Proximate.revokeProxiesForReceiver(f);
+    await Proximate.revokeProxiesForReceiver(f);
+
+    // Verify the proxy no longer works.
+    await expectAsync(proxy()).toBeRejected();
+
+    // Verify the internal mappings are gone.
     expect(Proximate.mapIdToReceiver.get(id)).not.toBeDefined();
     expect(Proximate.mapReceiverToId.get(f)).not.toBeDefined();
     await proxy[Proximate.LINK].close();

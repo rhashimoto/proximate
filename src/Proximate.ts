@@ -375,6 +375,13 @@ export class Proximate {
     return instance.createLocalProxy(endpoint, ['']);
   }
 
+  // Disable all proxies for a receiver object, regardless of endpoint.
+  public static revokeProxiesForReceiver(receiver: any) {
+    const id = Proximate.mapReceiverToId.get(receiver)
+    Proximate.mapIdToReceiver.delete(id);
+    return Proximate.mapReceiverToId.delete(receiver);
+  }
+
   // This key accesses a proxy member function that releases the
   // resources used by the proxy. The proxy subsequently should not
   // be used, except for LINK access.
