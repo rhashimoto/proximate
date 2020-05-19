@@ -352,23 +352,18 @@ describe('tracking', function() {
     }
     Proximate.protocols.set('function', new FunctionProtocol());
 
-    function f() {
-      return 'foo';
-    }
-
-    const objectUnderTest = Proximate.wrap(port1, () => f);
+    const objectUnderTest = Proximate.wrap(port1, () => () => 'foo');
     const proxy = Proximate.wrap(port2);
 
     const proxyFuncA = await proxy();
     proxy[Proximate.LINK].track();
     const proxyFuncB = await proxy();
 
-    await expectAsync(proxyFuncA()).toBeResolvedTo(f());
-    await expectAsync(proxyFuncB()).toBeResolvedTo(f());
+    await expectAsync(proxyFuncA()).toBeResolvedTo('foo');
+    await expectAsync(proxyFuncB()).toBeResolvedTo('foo');
 
     await proxy[Proximate.LINK].releaseTracked();
-
-    await expectAsync(proxyFuncA()).toBeResolvedTo(f());
+    await expectAsync(proxyFuncA()).toBeResolvedTo('foo');
     await expectAsync(proxyFuncB()).toBeRejected();
 
     await proxy[Proximate.LINK].close();

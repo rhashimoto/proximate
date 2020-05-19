@@ -85,12 +85,12 @@ export class Proximate {
       try {
         // The head of the path is the receiver id. The empty string is
         // a special key for the primary proxy.
-        const proxyId = message.path.shift() || this.defaultId;
+        const proxyId = message.path[0] || this.defaultId;
         const [tail] = message.path.slice(-1);
-        let { receiver } = Proximate.mapIdToObject.get(proxyId) || { receiver: undefined };
+        let receiver = Proximate.mapIdToObject.get(proxyId)?.receiver;
 
         let parent;
-        for (const property of message.path) {
+        for (const property of message.path.slice(1)) {
           parent = receiver;
           receiver = receiver[property];
         }
@@ -221,7 +221,6 @@ export class Proximate {
     proxy = new Proxy(target, {
       get: (target, property) => {
         if (typeof property === 'symbol') return target[property];
-        if (!this.mapIdToProxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         if (property === 'then') {
           if (path.length === 1) return { then: (f) => f(proxy) };
           const promise = this.sendRequest(endpoint, { path });
@@ -235,7 +234,6 @@ export class Proximate {
           target[property] = value;
           return true;
         }
-        if (!this.mapIdToProxies.get(id)?.has(proxy)) throw Error('invalid proxy');
         const [wireValue, transferables] = this.serialize(value);
         this.sendRequest(endpoint, {
           path: [...path, property],
@@ -245,7 +243,6 @@ export class Proximate {
       },
 
       apply: (_target, _, args: any[]) => {
-        if (!this.mapIdToProxies.get(id)?.has(proxy)) return Promise.reject(Error('invalid proxy'));
         const serialized = args.map(arg => this.serialize(arg));
         return this.sendRequest(endpoint, {
           path,
@@ -254,19 +251,22 @@ export class Proximate {
       }
     });
     
-    // Track the created proxies by recording them in a Map. There
-    // may be multiple proxies for the same remote object, in which
-    // case all the proxies use the same id.
-    if (!this.mapIdToProxies.has(id)) {
-      this.mapIdToProxies.set(id, new Set());
-    }
-    const proxiesForId = this.mapIdToProxies.get(id);
-    proxiesForId.add(proxy);
-    this.mapIdToProxies.set(id, proxiesForId);
+    if (path.length === 1) {
+      // Track argument and return value proxies (but not proxies created
+      // by member reference) by recording them in a Map. There may be
+      // multiple proxies for the same remote object, in which case all
+      // the proxies use the same id.
+      if (!this.mapIdToProxies.has(id)) {
+        this.mapIdToProxies.set(id, new Set());
+      }
+      const proxiesForId = this.mapIdToProxies.get(id);
+      proxiesForId.add(proxy);
+      this.mapIdToProxies.set(id, proxiesForId);
 
-    // Add created proxies in another container to track from a
-    // specific point in time. The primary proxy is not included.
-    id && this.trackedProxies.add(proxy);
+      // Add created proxies in another container to track from a
+      // specific point in time. The primary proxy is not included.
+      id && this.trackedProxies.add(proxy);
+    }
     return proxy;
   }
 
