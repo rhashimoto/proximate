@@ -211,10 +211,10 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2);
 
     // Verify that initially the proxy works.
-    const id = Proximate.mapObjectToId.get(f);
+    const id = Proximate.mapReceiverToId.get(f);
     await expectAsync(proxy()).toBeResolvedTo(f());
     expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
-    expect(Proximate.mapIdToObject.get(id)).toBeDefined();
+    expect(Proximate.mapIdToReceiver.get(id)).toBeDefined();
 
     await proxy[Proximate.RELEASE]();
 
@@ -223,8 +223,8 @@ describe('release', function() {
 
     // Verify the internal mappings are gone.
     expect(proxy[Proximate.LINK].mapIdToProxies.size).toBe(0)
-    expect(Proximate.mapIdToObject.get(id)).not.toBeDefined();
-    expect(Proximate.mapObjectToId.get(f)).not.toBeDefined();
+    expect(Proximate.mapIdToReceiver.get(id)).not.toBeDefined();
+    expect(Proximate.mapReceiverToId.get(f)).not.toBeDefined();
     await proxy[Proximate.LINK].close();
   });
 
@@ -234,10 +234,10 @@ describe('release', function() {
     const proxy = Proximate.wrap(port2);
 
     // Verify that initially the proxy works.
-    const id = Proximate.mapObjectToId.get(f);
+    const id = Proximate.mapReceiverToId.get(f);
     await expectAsync(proxy()).toBeResolvedTo(f());
     expect(proxy[Proximate.LINK].mapIdToProxies.size).toBeGreaterThan(0)
-    expect(Proximate.mapIdToObject.get(id)).toBeDefined();
+    expect(Proximate.mapIdToReceiver.get(id)).toBeDefined();
 
     await proxy[Proximate.RELEASE]();
     await proxy[Proximate.RELEASE]();
@@ -248,8 +248,8 @@ describe('release', function() {
 
     // Verify the internal mappings are gone.
     expect(proxy[Proximate.LINK].mapIdToProxies.size).toBe(0)
-    expect(Proximate.mapIdToObject.get(id)).not.toBeDefined();
-    expect(Proximate.mapObjectToId.get(f)).not.toBeDefined();
+    expect(Proximate.mapIdToReceiver.get(id)).not.toBeDefined();
+    expect(Proximate.mapReceiverToId.get(f)).not.toBeDefined();
     await proxy[Proximate.LINK].close();
   });
 });

@@ -87,7 +87,7 @@ export class Proximate {
         // a special key for the primary proxy.
         const proxyId = message.path[0] || this.defaultId;
         const [tail] = message.path.slice(-1);
-        let receiver = Proximate.mapIdToObject.get(proxyId)?.receiver;
+        let receiver = Proximate.mapIdToReceiver.get(proxyId)?.receiver;
 
         let parent;
         for (const property of message.path.slice(1)) {
@@ -281,21 +281,21 @@ export class Proximate {
     return result;
   }
 
-  // Two-way mapping between objects and proxy ids. This is for looking
-  // up local objects that are passed by proxy to remote endpoints.
+  // Two-way mapping between receiver objects and proxy ids. This is for
+  // looking up local objects that are passed by proxy to remote endpoints.
   // Reference counting is used to remove associations when all remote
   // proxies have been released.
-  static mapObjectToId = new WeakMap<any, string>();
-  static mapIdToObject = new Map<string, { receiver: any, count: number }>();
+  static mapReceiverToId = new WeakMap<any, string>();
+  static mapIdToReceiver = new Map<string, { receiver: any, count: number }>();
 
   private incReceiverRef(receiver: any) {
-    let id = Proximate.mapObjectToId.get(receiver);
+    let id = Proximate.mapReceiverToId.get(receiver);
     if (!id) {
       id = nonce();
-      Proximate.mapObjectToId.set(receiver, id);
-      Proximate.mapIdToObject.set(id, { receiver, count: 0 });
+      Proximate.mapReceiverToId.set(receiver, id);
+      Proximate.mapIdToReceiver.set(id, { receiver, count: 0 });
     }
-    Proximate.mapIdToObject.get(id).count++;
+    Proximate.mapIdToReceiver.get(id).count++;
     return id;
   }
 
@@ -304,13 +304,13 @@ export class Proximate {
   private decReceiverRef(remoteProxies: Map<string, number>) {
     remoteProxies.forEach((count, id) => {
       const localId = id || this.defaultId;
-      const entry = Proximate.mapIdToObject.get(localId);
+      const entry = Proximate.mapIdToReceiver.get(localId);
       if (entry) {
         if ((entry.count -= count) > 0) {
-          Proximate.mapIdToObject.set(localId, entry);
+          Proximate.mapIdToReceiver.set(localId, entry);
         } else {
-          Proximate.mapObjectToId.delete(entry.receiver);
-          Proximate.mapIdToObject.delete(localId);
+          Proximate.mapReceiverToId.delete(entry.receiver);
+          Proximate.mapIdToReceiver.delete(localId);
         }
       }
     });
