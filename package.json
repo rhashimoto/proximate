@@ -18,7 +18,7 @@
   "devDependencies": {
     "@rollup/plugin-typescript": "^4.1.1",
     "jasmine": "^3.5.0",
-    "karma": "^5.0.5",
+    "karma": "^6.4.1",
     "karma-chrome-launcher": "^3.1.0",
     "karma-jasmine": "^3.1.1",
     "rollup": "^2.9.0",
